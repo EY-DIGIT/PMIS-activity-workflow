@@ -1,13 +1,12 @@
 package com.pmis.activityworkflow.service.inbox;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.pmis.activityworkflow.entity.ParallelParticipantEntity;
 import com.pmis.activityworkflow.entity.ProcessInstanceEntity;
 import com.pmis.activityworkflow.repository.ParallelParticipantRepository;
 import com.pmis.activityworkflow.repository.ProcessInstanceRepository;
 import com.pmis.activityworkflow.service.assignments.ActivityDetailsClient;
 import com.pmis.activityworkflow.web.response.ApprovalInboxItem;
-
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

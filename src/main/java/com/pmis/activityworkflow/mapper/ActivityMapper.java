@@ -1,7 +1,5 @@
 package com.pmis.activityworkflow.mapper;
 
-import org.springframework.stereotype.Component;
-
 import com.pmis.activityworkflow.entity.ActionEntity;
 import com.pmis.activityworkflow.entity.ActivityEntity;
 import com.pmis.activityworkflow.entity.AuditDetails;
@@ -10,6 +8,7 @@ import com.pmis.activityworkflow.web.models.ActionDTO;
 import com.pmis.activityworkflow.web.models.ActivityDTO;
 import com.pmis.activityworkflow.web.models.AuditDetailsDTO;
 import com.pmis.activityworkflow.web.models.StateDTO;
+import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;

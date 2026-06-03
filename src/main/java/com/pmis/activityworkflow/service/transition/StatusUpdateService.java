@@ -1,21 +1,22 @@
 package com.pmis.activityworkflow.service.transition;
 
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
 import com.pmis.activityworkflow.entity.AuditDetails;
 import com.pmis.activityworkflow.entity.ProcessInstanceEntity;
 import com.pmis.activityworkflow.mapper.ActivityMapper;
 import com.pmis.activityworkflow.repository.ProcessInstanceRepository;
+import com.pmis.activityworkflow.service.assignments.ActivityAssignmentsClient;
+import com.pmis.activityworkflow.service.assignments.AssignmentData;
 import com.pmis.activityworkflow.service.notification.NotificationClient;
-import com.pmis.activityworkflow.service.notification.NotificationEvent;
 import com.pmis.activityworkflow.service.notification.NotificationClient.Recipient;
+import com.pmis.activityworkflow.service.notification.NotificationEvent;
 import com.pmis.activityworkflow.web.models.AuditDetailsDTO;
 import com.pmis.activityworkflow.web.models.ProcessInstanceDTO;
 import com.pmis.activityworkflow.web.models.RequestInfo;
 import com.pmis.activityworkflow.web.models.UserInfo;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -38,6 +39,7 @@ public class StatusUpdateService {
     private final ProcessInstanceRepository processRepository;
     private final ActivityMapper mapper;
     private final NotificationClient notificationClient;
+    private final ActivityAssignmentsClient assignmentsClient;
 
     @Transactional
     public void updateStatus(RequestInfo requestInfo,
@@ -88,7 +90,7 @@ public class StatusUpdateService {
             return;
         }
 
-        Recipient recipient = resolveSubmitter(saved, requestInfo);
+        Recipient recipient = resolveRecipient(saved, event, requestInfo);
         notificationClient.notifyOutcome(saved, event, recipient);
     }
 
@@ -122,38 +124,61 @@ public class StatusUpdateService {
     }
 
     /**
-     * Resolve the original submitter:
-     *   1. Look up the very first ProcessInstance for this activity — its
-     *      createdBy is the original submitter.
-     *   2. Fall back to the current request's userInfo if we can't find one
-     *      (shouldn't happen in steady state, but defensive).
+     * Pick the email + name to notify based on which event we're firing.
      *
-     * Email isn't stored on ProcessInstance, so the external API has to
-     * resolve uuid -> email itself. We pass both when we have them.
+     * <ul>
+     *   <li>READY_FOR_OWNER_REVIEW → the owner-division approver (from
+     *       {@code ownerApprover[0]} on the upstream assignments API)</li>
+     *   <li>OWNER_APPROVED / OWNER_REJECTED / REJECTED_BY_REVIEWER /
+     *       COMPLETED → the activity's owner / submitter (from {@code owner[0]}
+     *       on the upstream assignments API)</li>
+     * </ul>
+     *
+     * <p>If the upstream lookup fails or returns nothing for the chosen
+     * field, we return a recipient with null email — the notification call
+     * will then be skipped by {@link NotificationClient#notifyOutcome} with
+     * a warning rather than the upstream 422.</p>
      */
-    private Recipient resolveSubmitter(ProcessInstanceEntity saved,
+    private Recipient resolveRecipient(ProcessInstanceEntity saved,
+                                       NotificationEvent event,
                                        RequestInfo requestInfo) {
-        Optional<ProcessInstanceEntity> first = processRepository
-                .findByBusinessServiceAndActivityIdOrderByAuditDetails_CreatedTimeAsc(
-                        saved.getBusinessService(), saved.getActivityId())
-                .stream().findFirst();
+        try {
+            AssignmentData data = assignmentsClient.fetch(saved.getActivityId());
+            AssignmentData.UserRef target = pickRecipientFromAssignments(data, event);
+            if (target != null && target.getEmail() != null) {
+                return new Recipient(
+                        target.getId(),
+                        target.getEmail(),
+                        target.fullName());
+            }
+        } catch (Exception ex) {
+            log.warn("Assignments lookup for {} on activity {} failed: {} - falling back",
+                    event, saved.getActivityId(), ex.getMessage());
+        }
 
-        String submitterUuid = first
-                .map(p -> p.getAuditDetails() == null ? null : p.getAuditDetails().getCreatedBy())
-                .orElseGet(() -> Optional.ofNullable(requestInfo)
-                        .map(RequestInfo::getUserInfo).map(UserInfo::getUuid).orElse(null));
-
+        // Fallback — caller info if we have it; otherwise empty recipient.
         UserInfo callerUser = Optional.ofNullable(requestInfo)
                 .map(RequestInfo::getUserInfo).orElse(null);
-
-        boolean callerIsSubmitter = callerUser != null
-                && submitterUuid != null
-                && submitterUuid.equals(callerUser.getUuid());
-
         return new Recipient(
-                submitterUuid,
-                null,                                       // external API resolves uuid -> email
-                callerIsSubmitter ? callerUser.getName() : null);
+                callerUser != null ? callerUser.getUuid() : null,
+                null,
+                callerUser != null ? callerUser.getName() : null);
+    }
+
+    /** Choose the right user from the assignments payload for this event. */
+    private AssignmentData.UserRef pickRecipientFromAssignments(AssignmentData data,
+                                                                NotificationEvent event) {
+        if (data == null) return null;
+
+        List<AssignmentData.UserRef> candidates = switch (event) {
+            case READY_FOR_OWNER_REVIEW -> data.getOwnerApprover();
+            // All other outcome events go back to the activity owner/submitter
+            case OWNER_APPROVED, OWNER_REJECTED, REJECTED_BY_REVIEWER, COMPLETED
+                                        -> data.getOwner();
+            default                     -> null;
+        };
+        if (candidates == null || candidates.isEmpty()) return null;
+        return candidates.get(0);
     }
 
     /* =====================  DTO -> Entity  ===================== */

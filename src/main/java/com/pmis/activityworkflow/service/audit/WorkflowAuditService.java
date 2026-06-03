@@ -1,7 +1,5 @@
 package com.pmis.activityworkflow.service.audit;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.pmis.activityworkflow.entity.WorkflowAuditEntity;
 import com.pmis.activityworkflow.repository.WorkflowAuditRepository;
 import com.pmis.activityworkflow.service.transition.ProcessStateAndAction;
@@ -10,7 +8,8 @@ import com.pmis.activityworkflow.web.models.RequestInfo;
 import com.pmis.activityworkflow.web.models.Role;
 import com.pmis.activityworkflow.web.models.UserInfo;
 import com.pmis.activityworkflow.web.request.TransitionRequest;
-
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -81,9 +80,9 @@ public class WorkflowAuditService {
                     .performedByUsername(user.username())
                     .performedByRoles(user.roles())
                     .comment(req.getComment())
-               //     .ipAddress(http.ip())
-                //    .userAgent(http.userAgent())
-                //    .requestPayload(payload)
+//                    .ipAddress(http.ip())
+//                    .userAgent(http.userAgent())
+//                    .requestPayload(payload)
                     .createdTime(now)
                     .build());
         }
@@ -143,9 +142,9 @@ public class WorkflowAuditService {
                 .performedByUsername(user.username())
                 .performedByRoles(user.roles())
                 .comment(req != null ? req.getComment() : null)
-               // .ipAddress(http.ip())
-             //   .userAgent(http.userAgent())
-              //  .requestPayload(payload)
+//                .ipAddress(http.ip())
+//                .userAgent(http.userAgent())
+//                .requestPayload(payload)
                 .createdTime(now)
                 .build();
     }

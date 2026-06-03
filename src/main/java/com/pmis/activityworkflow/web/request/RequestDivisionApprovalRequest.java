@@ -1,32 +1,27 @@
 package com.pmis.activityworkflow.web.request;
 
-import com.pmis.activityworkflow.web.models.DivisionInput;
 import com.pmis.activityworkflow.web.models.RequestInfo;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotEmpty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.util.List;
-
 /**
- * Seed the parallel approval gate for one record at one parallel state.
+ * Body for {@code POST /activities/parallel/request-division-approval}.
  *
- * The body is now a list of <b>divisions</b>. Each division contributes
- * exactly one approver (who votes) and any number of collaborator users
- * (stored, not voting, not notified).
+ * <p>The single attached file + comment are SHARED across every division
+ * approver — same email goes to all of them. The file part is sent as a
+ * separate multipart 'file' field on the request, not in this body.</p>
  */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
 @JsonIgnoreProperties(ignoreUnknown = true)
-public class SeedParticipantsRequest {
+public class RequestDivisionApprovalRequest {
 
     @JsonProperty("RequestInfo")
     private RequestInfo requestInfo;
@@ -37,14 +32,15 @@ public class SeedParticipantsRequest {
     @NotBlank
     private String activityId;
 
-    /** Parent project — one project has many activities. */
     private String projectId;
 
-    /** The parallel state to seed (e.g. PENDINGATCONCERNEDDIVISION). */
-    @NotBlank
+    /**
+     * Optional. If omitted, we resolve from the activity's current state
+     * in {@code aw_process_instance}, falling back to
+     * {@code PENDINGATCONCERNEDDIVISION}.
+     */
     private String stateName;
 
-    @NotEmpty
-    @Valid
-    private List<DivisionInput> divisions;
+    /** Optional admin note attached to each approval-request email. */
+    private String comment;
 }

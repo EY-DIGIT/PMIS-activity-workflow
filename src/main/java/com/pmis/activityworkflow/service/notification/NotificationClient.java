@@ -86,9 +86,10 @@ public class NotificationClient {
                               Recipient recipient) {
 
         if (!canDispatch(event, 1)) return;
-        if (recipient == null
-                || (isBlank(recipient.email()) && isBlank(recipient.userUuid()))) {
-            log.warn("No recipient details for {} on activity {} - skipping",
+        if (recipient == null || isBlank(recipient.email())) {
+            // Upstream API requires at least one email in 'to'. Skipping the
+            // call avoids a guaranteed 422 from the notify API.
+            log.warn("No email for recipient on {} for activity {} - skipping notification",
                     event, transition.getActivityId());
             return;
         }
@@ -177,6 +178,16 @@ public class NotificationClient {
 
     /**
      * Build the request body the upstream notification API expects.
+     *
+     * Upstream API shape (POST /notification/email/send):
+     * <pre>
+     *   {
+     *     "to":      ["recipient@example.com"],
+     *     "subject": "...",
+     *     "body":    "...",
+     *     "is_html": false
+     *   }
+     * </pre>
      *
      * The {@code context} argument and {@code variables} are intentionally
      * ignored when assembling the outgoing payload — we keep them in the

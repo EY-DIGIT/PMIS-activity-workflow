@@ -1,11 +1,8 @@
 package com.pmis.activityworkflow.service.inbox;
 
-
-import com.pmis.activityworkflow.entity.DocumentEntity;
 import com.pmis.activityworkflow.entity.ParallelParticipantEntity;
 import com.pmis.activityworkflow.entity.ProcessInstanceEntity;
 import com.pmis.activityworkflow.exception.InvalidTransitionException;
-import com.pmis.activityworkflow.repository.DocumentRepository;
 import com.pmis.activityworkflow.repository.ParallelParticipantRepository;
 import com.pmis.activityworkflow.repository.ProcessInstanceRepository;
 import com.pmis.activityworkflow.service.assignments.ActivityDetailsClient;
@@ -24,62 +21,76 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * Builds the single payload returned by GET /activities/inbox/{activityId}.
+ *
+ * <p>Combines:</p>
+ * <ul>
+ *   <li>Upstream activity API → displayCode, name, description, dates,
+ *       ownerDivision, vendorId, projectId</li>
+ *   <li>Upstream project API → name, projectCode, vendors[]</li>
+ *   <li>{@code aw_parallel_participant} → per-division vote status</li>
+ *   <li>{@code aw_process_instance} → latest SUBMIT row (timestamp, comment)</li>
+ *   <li>{@code aw_document} → attachments tied to the activity</li>
+ * </ul>
+ */
 @Service
 @Slf4j
 @RequiredArgsConstructor
 public class ApprovalDetailService {
- 
+
     private final ParallelParticipantRepository participantRepository;
     private final ProcessInstanceRepository processRepository;
     private final ActivityDetailsClient activityDetailsClient;
- 
-    public ApprovalDetailResponse forActivity(String businessService,
-                                              String activityId,
-                                              String userUuid) {
- 
+
+    public ApprovalDetailResponse forActivity(String activityId, String userUuid) {
+
         // ---- 1. participants for this activity, at any parallel state ----
         // We pull the most recent state with participants - the one the
         // record currently sits on.
         List<ParallelParticipantEntity> participants =
-                participantRepository.findInboxParticipantsForActivity(businessService, activityId);
- 
+                participantRepository.findInboxParticipantsForActivity(activityId);
+
         if (participants.isEmpty()) {
             throw new InvalidTransitionException(
-                    "No participants found for activity " + activityId
-                            + " under businessService " + businessService);
+                    "No participants found for activity " + activityId);
         }
- 
+
+        // businessService is the same across all rows for one activity;
+        // pluck it off the first row for the SUBMIT lookup below.
+        String businessService = participants.get(0).getBusinessService();
+
         // current state = the state name on the newest participant rows
         String currentState = participants.get(0).getStateName();
         // narrow to rows on that state (older rows may exist from earlier seeds)
         List<ParallelParticipantEntity> currentRows = participants.stream()
                 .filter(p -> currentState.equals(p.getStateName()))
                 .toList();
- 
+
         ParallelParticipantEntity yourRow = currentRows.stream()
                 .filter(p -> userUuid.equals(p.getApproverUserUuid()))
                 .findFirst()
                 .orElse(null);
- 
+
         // ---- 2. upstream activity + project ----
         JsonNode activity = activityDetailsClient.fetchActivity(activityId);
         String vendorId  = text(activity, "vendorId");
         String projectId = text(activity, "projectId");
         if (projectId == null && yourRow != null) projectId = yourRow.getProjectId();
- 
+
         JsonNode project = projectId == null ? null : activityDetailsClient.fetchProject(projectId);
         JsonNode vendor  = pickVendor(project, vendorId);
- 
+
         // ---- 3. latest SUBMIT (for the submittedAt timestamp on the screen) ----
         Optional<ProcessInstanceEntity> submit = processRepository.findLatestSubmit(
                 businessService, activityId);
         Long submittedAt = submit
                 .map(s -> s.getAuditDetails() == null ? null : s.getAuditDetails().getCreatedTime())
                 .orElse(null);
- 
+
         // ---- 4. organization submissions — every comment + attachment for this activity ----
         List<OrganizationSubmission> submissions = fetchSubmissions(activityId);
- 
+
         // ---- 5. per-division status rows ----
         List<DivisionStatus> breakdown = new ArrayList<>(currentRows.size());
         for (ParallelParticipantEntity p : currentRows) {
@@ -93,7 +104,7 @@ public class ApprovalDetailService {
                     .isYou(userUuid.equals(p.getApproverUserUuid()))
                     .build());
         }
- 
+
         // ---- 6. assemble ----
         return ApprovalDetailResponse.builder()
                 .activityId(activityId)
@@ -116,9 +127,9 @@ public class ApprovalDetailService {
                 .yourStatusBreakdown(breakdown)
                 .build();
     }
- 
+
     /* ============================================================ */
- 
+
     /**
      * Pull the comments+attachments collection from upstream for this
      * activity and surface every entry. No filtering — both the body
@@ -133,7 +144,7 @@ public class ApprovalDetailService {
         if (elements == null || !elements.isArray() || elements.isEmpty()) {
             return List.of();
         }
- 
+
         List<OrganizationSubmission> out = new ArrayList<>(elements.size());
         for (JsonNode el : elements) {
             out.add(OrganizationSubmission.builder()
@@ -146,7 +157,7 @@ public class ApprovalDetailService {
         }
         return out;
     }
- 
+
     private CommentAuthor toAuthor(JsonNode author) {
         if (author == null || author.isMissingNode() || author.isNull()) return null;
         String first = text(author, "firstName");
@@ -167,7 +178,7 @@ public class ApprovalDetailService {
                 .displayName(display)
                 .build();
     }
- 
+
     private List<Attachment> toAttachments(JsonNode arr) {
         if (arr == null || !arr.isArray()) return List.of();
         List<Attachment> out = new ArrayList<>(arr.size());
@@ -182,14 +193,14 @@ public class ApprovalDetailService {
         }
         return out;
     }
- 
+
     private Long longOrNull(JsonNode node, String field) {
         if (node == null) return null;
         JsonNode v = node.path(field);
         if (v.isMissingNode() || v.isNull() || !v.isNumber()) return null;
         return v.asLong();
     }
- 
+
     private JsonNode pickVendor(JsonNode project, String vendorId) {
         if (project == null || vendorId == null) return null;
         JsonNode vendors = project.path("vendors");
@@ -199,7 +210,7 @@ public class ApprovalDetailService {
         }
         return null;
     }
- 
+
     private String text(JsonNode node, String field) {
         if (node == null) return null;
         JsonNode v = node.path(field);

@@ -1,11 +1,10 @@
 package com.pmis.activityworkflow.repository;
 
+import com.pmis.activityworkflow.entity.ParallelParticipantEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-
-import com.pmis.activityworkflow.entity.ParallelParticipantEntity;
 
 import java.util.List;
 import java.util.Optional;
@@ -50,19 +49,20 @@ public interface ParallelParticipantRepository
     List<ParallelParticipantEntity> findInboxForApprover(
             @Param("userUuid")   String userUuid,
             @Param("voteStatus") String voteStatus);
-    
+
     /**
      * All participant rows for an activity, newest first. Used by the
      * approval detail screen to figure out (a) which state the activity is
      * currently parked at and (b) the full per-division status list.
+     *
+     * <p>activityId alone is unique enough for the lookup — an activity
+     * cannot belong to two business services in this system.</p>
      */
     @Query("""
            SELECT p FROM ParallelParticipantEntity p
-            WHERE p.businessService = :businessService
-              AND p.activityId      = :activityId
+            WHERE p.activityId = :activityId
             ORDER BY p.createdAt DESC
            """)
     List<ParallelParticipantEntity> findInboxParticipantsForActivity(
-            @Param("businessService") String businessService,
-            @Param("activityId")      String activityId);
+            @Param("activityId") String activityId);
 }

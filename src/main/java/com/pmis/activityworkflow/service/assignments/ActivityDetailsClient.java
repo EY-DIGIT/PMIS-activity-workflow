@@ -1,9 +1,8 @@
 package com.pmis.activityworkflow.service.assignments;
 
+import com.pmis.activityworkflow.config.MilestoneCommentsProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.pmis.activityworkflow.config.MilestoneCommentsProperties;
-
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
@@ -14,14 +13,23 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.util.Optional;
 
+/**
+ * Fetches activity + project details from the upstream system for use
+ * by the approval inbox.
+ *
+ * <p>Both calls forward the caller's Authorization header verbatim.
+ * Failures here are tolerated — we log and return null so the inbox
+ * row still renders with whatever data we have, instead of failing
+ * the whole list.</p>
+ */
 @Service
 @Slf4j
 public class ActivityDetailsClient {
- 
+
     private final MilestoneCommentsProperties props;
     private final RestClient milestoneCommentsRestClient;
     private final ObjectMapper objectMapper;
- 
+
     public ActivityDetailsClient(
             MilestoneCommentsProperties props,
             @Qualifier("milestoneCommentsRestClient") RestClient milestoneCommentsRestClient,
@@ -30,14 +38,14 @@ public class ActivityDetailsClient {
         this.milestoneCommentsRestClient = milestoneCommentsRestClient;
         this.objectMapper = objectMapper;
     }
- 
+
     /** Get full activity JSON (the {@code data} block). */
     public JsonNode fetchActivity(String activityId) {
         if (!StringUtils.hasText(activityId)) return null;
         String url = props.getActivityLookupUrlTemplate().replace("{activityId}", activityId);
         return fetchData(url, "activity " + activityId);
     }
- 
+
     /**
      * Get full project JSON (the {@code data} block). The project URL is
      * derived from the activity URL template — same base, different path.
@@ -47,7 +55,7 @@ public class ActivityDetailsClient {
         String url = projectLookupUrl(projectId);
         return fetchData(url, "project " + projectId);
     }
- 
+
     /**
      * GET the comments + attachments collection for an activity.
      *
@@ -65,9 +73,9 @@ public class ActivityDetailsClient {
         JsonNode elements = data.path("_embedded").path("elements");
         return elements.isArray() ? elements : null;
     }
- 
+
     /* ============================================================ */
- 
+
     private String projectLookupUrl(String projectId) {
         // Reuse the same host as the activity-lookup URL by substituting
         // /activities/ -> /projects/ and {activityId} -> projectId.
@@ -84,7 +92,7 @@ public class ActivityDetailsClient {
         }
         return base;
     }
- 
+
     private JsonNode fetchData(String url, String contextForLogs) {
         String auth = currentAuthHeader();
         if (!StringUtils.hasText(auth)) {
@@ -105,7 +113,7 @@ public class ActivityDetailsClient {
             return null;
         }
     }
- 
+
     private String currentAuthHeader() {
         return Optional.ofNullable(RequestContextHolder.getRequestAttributes())
                 .filter(ServletRequestAttributes.class::isInstance)

@@ -1,10 +1,9 @@
 package com.pmis.activityworkflow.enrichment;
 
-import org.springframework.stereotype.Component;
-
 import com.pmis.activityworkflow.web.models.ActivityDTO;
 import com.pmis.activityworkflow.web.models.AuditDetailsDTO;
 import com.pmis.activityworkflow.web.request.ActivityRequest;
+import org.springframework.stereotype.Component;
 
 import java.util.UUID;
 

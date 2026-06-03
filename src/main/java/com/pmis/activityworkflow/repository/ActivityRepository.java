@@ -1,9 +1,8 @@
 package com.pmis.activityworkflow.repository;
 
+import com.pmis.activityworkflow.entity.ActivityEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
-
-import com.pmis.activityworkflow.entity.ActivityEntity;
 
 import java.util.List;
 import java.util.Optional;

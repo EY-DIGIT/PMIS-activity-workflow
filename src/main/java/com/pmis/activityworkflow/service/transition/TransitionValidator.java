@@ -1,12 +1,11 @@
 package com.pmis.activityworkflow.service.transition;
 
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-
 import com.pmis.activityworkflow.exception.InvalidTransitionException;
 import com.pmis.activityworkflow.web.models.RequestInfo;
 import com.pmis.activityworkflow.web.models.Role;
 import com.pmis.activityworkflow.web.models.UserInfo;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
 
 import java.util.Collections;
 import java.util.List;

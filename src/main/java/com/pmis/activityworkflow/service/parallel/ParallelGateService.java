@@ -1,10 +1,5 @@
 package com.pmis.activityworkflow.service.parallel;
 
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
 import com.pmis.activityworkflow.entity.DivisionUserEntity;
 import com.pmis.activityworkflow.entity.ParallelParticipantEntity;
 import com.pmis.activityworkflow.exception.InvalidTransitionException;
@@ -24,6 +19,10 @@ import com.pmis.activityworkflow.web.request.AutoSeedRequest;
 import com.pmis.activityworkflow.web.request.CastVoteRequest;
 import com.pmis.activityworkflow.web.request.SeedParticipantsRequest;
 import com.pmis.activityworkflow.web.request.TransitionRequest;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -80,6 +79,18 @@ public class ParallelGateService {
      * ========================================================== */
     @Transactional
     public List<ParallelParticipantEntity> seedParticipants(SeedParticipantsRequest req) {
+        return seedParticipants(req, /* notify */ true);
+    }
+
+    /**
+     * Seed variant that lets the caller suppress the per-approver
+     * APPROVAL_REQUESTED notification — useful when the caller will fire
+     * the notification themselves moments later with a different payload
+     * (e.g. admin's comment + attachment).
+     */
+    @Transactional
+    public List<ParallelParticipantEntity> seedParticipants(SeedParticipantsRequest req,
+                                                            boolean notify) {
 
         long now = System.currentTimeMillis();
         List<ParallelParticipantEntity> needsNotify = new ArrayList<>();
@@ -177,7 +188,13 @@ public class ParallelGateService {
         }
 
         // Notify only approvers — collaborator users are record-only.
-        notificationClient.notifyApprovalRequested(needsNotify, isResubmission);
+        if (notify) {
+            notificationClient.notifyApprovalRequested(needsNotify, isResubmission);
+        } else {
+            log.debug("Seed notifications suppressed by caller for {}/{}/{} ({} would-be recipients)",
+                    req.getBusinessService(), req.getActivityId(), req.getStateName(),
+                    needsNotify.size());
+        }
 
         return participantRepository
                 .findByBusinessServiceAndActivityIdAndStateName(
@@ -197,6 +214,10 @@ public class ParallelGateService {
      */
     @Transactional
     public List<ParallelParticipantEntity> autoSeed(AutoSeedRequest req) {
+        return autoSeed(req, /* notify */ true);
+    }
+
+    private List<ParallelParticipantEntity> autoSeed(AutoSeedRequest req, boolean notify) {
 
         AssignmentData data = assignmentsClient.fetch(req.getActivityId());
 
@@ -259,10 +280,21 @@ public class ParallelGateService {
                 .divisions(divisions)
                 .build();
 
-        log.info("Auto-seed: {} division(s) resolved for activity {} from upstream API",
-                divisions.size(), req.getActivityId());
+        log.info("Auto-seed: {} division(s) resolved for activity {} from upstream API (notify={})",
+                divisions.size(), req.getActivityId(), notify);
 
-        return seedParticipants(seed);
+        return seedParticipants(seed, notify);
+    }
+
+    /**
+     * Same as {@link #autoSeed(AutoSeedRequest)} but does NOT send the
+     * per-approver APPROVAL_REQUESTED notification. Useful when the caller
+     * intends to fire its own notification (with extra context like an
+     * admin comment + attachment) immediately after.
+     */
+    @Transactional
+    public List<ParallelParticipantEntity> autoSeedWithoutNotify(AutoSeedRequest req) {
+        return autoSeed(req, /* notify */ false);
     }
 
 
@@ -312,7 +344,7 @@ public class ParallelGateService {
     }
 
     /* ==========================================================
-     *  After each vote: advance, reject, or wait
+     *  After each vote: reject immediately, otherwise wait for admin
      * ========================================================== */
     private void evaluateGate(CastVoteRequest req) {
 
@@ -321,14 +353,17 @@ public class ParallelGateService {
                         req.getBusinessService(), req.getActivityId(), req.getStateName());
 
         boolean anyRejected = all.stream().anyMatch(p -> VOTE_REJECTED.equals(p.getVoteStatus()));
-        boolean anyPending  = all.stream().anyMatch(p -> VOTE_PENDING.equals(p.getVoteStatus()));
 
         if (anyRejected) {
+            // Reject is a hard stop — auto-fire it so the record goes back
+            // to READYFORAPPROVAL without any manual step.
             log.info("Gate REJECT: {}/{}/{} - at least one participant rejected",
                     req.getBusinessService(), req.getActivityId(), req.getStateName());
-            fireSystemAction(req, ACTION_ANY_REJECTED);
+            fireSystemAction(req, ACTION_ANY_REJECTED, "Auto-fired by parallel gate: ANY_REJECTED");
             return;
         }
+
+        boolean anyPending = all.stream().anyMatch(p -> VOTE_PENDING.equals(p.getVoteStatus()));
         if (anyPending) {
             log.info("Gate WAIT: {}/{}/{} - {} participant(s) still pending",
                     req.getBusinessService(), req.getActivityId(), req.getStateName(),
@@ -336,24 +371,95 @@ public class ParallelGateService {
             return;
         }
 
-        // all approved
-        log.info("Gate ADVANCE: {}/{}/{} - all participants approved",
+        // All approved — but DO NOT auto-fire. Admin clicks "Request Owner
+        // Approval" to move the record forward. Log so the wait is visible.
+        log.info("Gate READY: {}/{}/{} - all participants approved; "
+                + "awaiting admin 'Request Owner Approval' action",
                 req.getBusinessService(), req.getActivityId(), req.getStateName());
-        fireSystemAction(req, ACTION_ALL_APPROVED);
+    }
+
+    /* ==========================================================
+     *  Admin fires ALL_APPROVED manually (the "Request Owner Approval" button)
+     * ========================================================== */
+
+    /**
+     * Admin-initiated counterpart to the (now-removed) auto-fire of
+     * ALL_APPROVED. Verifies every participant has APPROVED, then fires
+     * the transition so the record moves to PENDINGATOWNERDIVISION.
+     *
+     * @param businessService workflow definition name
+     * @param activityId      the record being advanced
+     * @param projectId       optional, carried onto the transition row
+     * @param stateName       the current parallel state (e.g. PENDINGATCONCERNEDDIVISION)
+     * @param comment         optional admin note attached to the transition
+     * @param requestInfo     admin's identity for audit
+     */
+    @Transactional
+    public void requestOwnerApproval(String businessService,
+                                     String activityId,
+                                     String projectId,
+                                     String stateName,
+                                     String comment,
+                                     RequestInfo requestInfo) {
+
+        List<ParallelParticipantEntity> rows = participantRepository
+                .findByBusinessServiceAndActivityIdAndStateName(
+                        businessService, activityId, stateName);
+
+        if (rows.isEmpty()) {
+            throw new InvalidTransitionException(
+                    "No participants seeded for " + businessService + "/" + activityId
+                            + " at state " + stateName + " - cannot request owner approval");
+        }
+
+        boolean anyRejected = rows.stream().anyMatch(p -> VOTE_REJECTED.equals(p.getVoteStatus()));
+        boolean anyPending  = rows.stream().anyMatch(p -> VOTE_PENDING.equals(p.getVoteStatus()));
+
+        if (anyRejected) {
+            throw new InvalidTransitionException(
+                    "Cannot request owner approval - at least one division has rejected");
+        }
+        if (anyPending) {
+            long pending = rows.stream().filter(p -> VOTE_PENDING.equals(p.getVoteStatus())).count();
+            throw new InvalidTransitionException(
+                    "Cannot request owner approval - " + pending
+                            + " division(s) have not yet approved");
+        }
+
+        // Build a synthetic CastVoteRequest just so fireSystemAction has the
+        // shape it expects. We do not write any vote.
+        CastVoteRequest synthetic = CastVoteRequest.builder()
+                .requestInfo(requestInfo)
+                .businessService(businessService)
+                .activityId(activityId)
+                .projectId(projectId)
+                .stateName(stateName)
+                .build();
+
+        String adminComment = (comment == null || comment.isBlank())
+                ? "Admin: Request Owner Approval"
+                : "Admin: " + comment;
+
+        log.info("Admin {} requested owner approval for {}/{}",
+                Optional.ofNullable(requestInfo)
+                        .map(RequestInfo::getUserInfo).map(UserInfo::getUuid).orElse("?"),
+                businessService, activityId);
+
+        fireSystemAction(synthetic, ACTION_ALL_APPROVED, adminComment);
     }
 
     /**
-     * Fire a transition on behalf of "the system" — the gate, not a user.
-     * Uses the original RequestInfo so the audit trail still ties the
-     * resulting transition to whoever cast the deciding vote.
+     * Fire a transition on behalf of "the system" — the gate or the admin
+     * button, not a regular user vote. Uses whatever RequestInfo we have so
+     * the audit trail still attributes the resulting transition.
      */
-    private void fireSystemAction(CastVoteRequest req, String actionName) {
+    private void fireSystemAction(CastVoteRequest req, String actionName, String comment) {
         ProcessInstanceDTO pi = ProcessInstanceDTO.builder()
                 .businessService(req.getBusinessService())
                 .activityId(req.getActivityId())
                 .projectId(req.getProjectId())
                 .action(actionName)
-                .comment("Auto-fired by parallel gate: " + actionName)
+                .comment(comment)
                 .build();
 
         TransitionRequest tr = TransitionRequest.builder()

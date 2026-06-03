@@ -1,13 +1,12 @@
 package com.pmis.activityworkflow.controller;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pmis.activityworkflow.entity.DocumentEntity;
 import com.pmis.activityworkflow.repository.DocumentRepository;
 import com.pmis.activityworkflow.service.document.DocumentService;
 import com.pmis.activityworkflow.service.document.DocumentService.DocumentMetadata;
 import com.pmis.activityworkflow.web.models.RequestInfo;
-
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -34,6 +33,18 @@ public class DocumentController {
     /**
      * Multipart upload. The file goes to the external file-store; the
      * returned docId/storeId + form metadata are saved in {@code aw_document}.
+     *
+     * <p>The {@code requestInfo} part should be a JSON string carrying
+     * {@code userInfo.uuid} and roles — same shape as on transition requests.</p>
+     *
+     * <p>Form fields (all parts of {@code multipart/form-data}):
+     * <ul>
+     *   <li><b>file</b> - required, the file itself</li>
+     *   <li><b>requestInfo</b> - optional JSON; uploader identity</li>
+     *   <li><b>businessService</b>, <b>activityId</b> - which record</li>
+     *   <li><b>activityId</b>, <b>projectId</b> - correlation IDs</li>
+     *   <li><b>documentType</b>, <b>comment</b>, <b>processInstanceId</b> - optional</li>
+     * </ul>
      */
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Upload a document (forwards to external file-store)")

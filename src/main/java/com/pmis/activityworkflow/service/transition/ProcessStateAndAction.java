@@ -4,7 +4,6 @@ import com.pmis.activityworkflow.entity.ActionEntity;
 import com.pmis.activityworkflow.entity.ProcessInstanceEntity;
 import com.pmis.activityworkflow.entity.StateEntity;
 import com.pmis.activityworkflow.web.models.ProcessInstanceDTO;
-
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;

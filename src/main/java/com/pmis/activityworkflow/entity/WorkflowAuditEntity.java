@@ -90,8 +90,11 @@ public class WorkflowAuditEntity {
 
 //    @Column(name = "ip_address", length = 64)
 //    private String ipAddress;
+//
 //    @Column(name = "user_agent", length = 512)
 //    private String userAgent;
+//
+//    /** Full request envelope as JSON, with authToken redacted. */
 //    @Column(name = "request_payload", columnDefinition = "text")
 //    private String requestPayload;
 

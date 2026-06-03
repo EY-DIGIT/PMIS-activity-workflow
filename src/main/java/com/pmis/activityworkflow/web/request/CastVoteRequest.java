@@ -1,9 +1,8 @@
 package com.pmis.activityworkflow.web.request;
 
+import com.pmis.activityworkflow.web.models.RequestInfo;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.pmis.activityworkflow.web.models.RequestInfo;
-
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import lombok.AllArgsConstructor;

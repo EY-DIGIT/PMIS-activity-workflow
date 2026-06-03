@@ -1,5 +1,7 @@
 package com.pmis.activityworkflow.service.assignments;
 
+import com.pmis.activityworkflow.config.AssignmentsProperties;
+import com.pmis.activityworkflow.exception.InvalidTransitionException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatusCode;
@@ -8,9 +10,6 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
-
-import com.pmis.activityworkflow.config.AssignmentsProperties;
-import com.pmis.activityworkflow.exception.InvalidTransitionException;
 
 import java.util.Optional;
 

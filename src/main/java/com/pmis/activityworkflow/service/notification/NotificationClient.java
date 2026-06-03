@@ -4,15 +4,20 @@ import com.pmis.activityworkflow.config.NotificationProperties;
 import com.pmis.activityworkflow.entity.ParallelParticipantEntity;
 import com.pmis.activityworkflow.entity.ProcessInstanceEntity;
 import com.pmis.activityworkflow.repository.ParallelParticipantRepository;
+import com.pmis.activityworkflow.repository.ProcessInstanceRepository;
+import com.pmis.activityworkflow.service.assignments.ActivityDetailsClient;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Wraps the external notification API.
@@ -42,17 +47,23 @@ public class NotificationClient {
     private final NotificationProperties props;
     private final RestClient notificationRestClient;
     private final ParallelParticipantRepository participantRepository;
+    private final ProcessInstanceRepository processRepository;
     private final NotificationTemplateService templates;
+    private final ActivityDetailsClient activityDetailsClient;
 
     public NotificationClient(
             NotificationProperties props,
             @Qualifier("notificationRestClient") RestClient notificationRestClient,
             ParallelParticipantRepository participantRepository,
-            NotificationTemplateService templates) {
+            ProcessInstanceRepository processRepository,
+            NotificationTemplateService templates,
+            ActivityDetailsClient activityDetailsClient) {
         this.props = props;
         this.notificationRestClient = notificationRestClient;
         this.participantRepository = participantRepository;
+        this.processRepository = processRepository;
         this.templates = templates;
+        this.activityDetailsClient = activityDetailsClient;
     }
 
     /* ============================================================
@@ -223,9 +234,12 @@ public class NotificationClient {
         vars.put("projectId", p.getProjectId());
         vars.put("businessService", p.getBusinessService());
         vars.put("stateName", p.getStateName());
-        vars.put("submittedBy", "");                    // optional — fill from latest ProcessInstance if you want
         vars.put("submittedAt", p.getCreatedAt());      // formatted by template engine
         vars.put("approvalUrl", deepLink(p));
+
+        // Enrich with human-readable activity + project details + submitter
+        enrichWithActivityDetails(vars, p.getActivityId(), p.getProjectId());
+        vars.put("submittedBy", lookupSubmittedBy(p.getBusinessService(), p.getActivityId()));
         return vars;
     }
 
@@ -243,7 +257,105 @@ public class NotificationClient {
         vars.put("actionAt",   t.getAuditDetails() == null
                 ? System.currentTimeMillis() : t.getAuditDetails().getCreatedTime());
         vars.put("comment", t.getComment() == null ? "" : t.getComment());
+
+        // Same enrichment as approval-request emails so all templates can
+        // reference {{activityName}} / {{projectCode}} etc consistently.
+        enrichWithActivityDetails(vars, t.getActivityId(), t.getProjectId());
+        vars.put("submittedBy", lookupSubmittedBy(t.getBusinessService(), t.getActivityId()));
         return vars;
+    }
+
+    /**
+     * Fill {@code activityName}, {@code activityDisplayCode},
+     * {@code projectName}, {@code projectCode} from the upstream APIs.
+     *
+     * <p>All four default to empty strings so templates never render
+     * literal {@code null}. Best-effort — if the upstream lookup fails
+     * we leave the placeholders empty but the email still goes out.</p>
+     */
+    private void enrichWithActivityDetails(Map<String, Object> vars,
+                                           String activityId,
+                                           String projectId) {
+        // Seed safe defaults first
+        vars.put("activityDisplayCode", "");
+        vars.put("activityName", "");
+        vars.put("projectCode", "");
+        vars.put("projectName", "");
+
+        if (!StringUtils.hasText(activityId)) return;
+
+        try {
+            JsonNode activity = activityDetailsClient.fetchActivity(activityId);
+            if (activity != null) {
+                putIfPresent(vars, "activityDisplayCode", activity, "displayCode");
+                putIfPresent(vars, "activityName",        activity, "name");
+                // If projectId wasn't on the participant row, fall back to the upstream value
+                if (!StringUtils.hasText(projectId)) {
+                    projectId = activity.path("projectId").asText(null);
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("Activity-details enrichment failed for {}: {}", activityId, ex.getMessage());
+        }
+
+        if (!StringUtils.hasText(projectId)) return;
+
+        try {
+            JsonNode project = activityDetailsClient.fetchProject(projectId);
+            if (project != null) {
+                putIfPresent(vars, "projectName", project, "name");
+                putIfPresent(vars, "projectCode", project, "projectCode");
+            }
+        } catch (Exception ex) {
+            log.warn("Project-details enrichment failed for {}: {}", projectId, ex.getMessage());
+        }
+    }
+
+    /**
+     * Resolve the "Submitted by" name. Prefers the upstream activity's
+     * {@code owner[0].login} (which is the activity submitter); falls back
+     * to the createdBy uuid on the earliest SUBMIT row in
+     * {@code aw_process_instance}.
+     */
+    private String lookupSubmittedBy(String businessService, String activityId) {
+        if (!StringUtils.hasText(activityId)) return "";
+        try {
+            JsonNode activity = activityDetailsClient.fetchActivity(activityId);
+            if (activity != null) {
+                JsonNode owners = activity.path("owner");
+                if (owners.isArray() && !owners.isEmpty()) {
+                    JsonNode first = owners.get(0);
+                    String firstName = first.path("firstName").asText(null);
+                    String lastName  = first.path("lastName").asText(null);
+                    if (StringUtils.hasText(firstName) || StringUtils.hasText(lastName)) {
+                        return ((firstName == null ? "" : firstName) + " "
+                                + (lastName == null ? "" : lastName)).trim();
+                    }
+                    String login = first.path("login").asText(null);
+                    if (StringUtils.hasText(login)) return login;
+                }
+            }
+        } catch (Exception ex) {
+            log.debug("Owner lookup for submittedBy failed on {}: {}", activityId, ex.getMessage());
+        }
+
+        // Fall back to the earliest SUBMIT row's actor in our own DB
+        return Optional.ofNullable(processRepository
+                        .findByBusinessServiceAndActivityIdOrderByAuditDetails_CreatedTimeAsc(
+                                businessService, activityId))
+                .filter(rows -> !rows.isEmpty())
+                .map(rows -> rows.get(0))
+                .map(row -> row.getAuditDetails() == null ? null
+                        : row.getAuditDetails().getCreatedBy())
+                .orElse("");
+    }
+
+    private void putIfPresent(Map<String, Object> vars, String key, JsonNode node, String field) {
+        if (node == null) return;
+        JsonNode v = node.path(field);
+        if (v.isMissingNode() || v.isNull()) return;
+        String text = v.asText();
+        if (StringUtils.hasText(text)) vars.put(key, text);
     }
 
     private String deepLink(ParallelParticipantEntity p) {

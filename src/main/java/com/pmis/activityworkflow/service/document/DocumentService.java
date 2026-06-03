@@ -17,16 +17,17 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Upload + persist a document.
+ * Upload + persist a document reference.
  *
- * <p>The upload itself happens via the upstream milestone-comments API
- * (see {@link MilestoneCommentsClient}). On success we persist a row in
- * {@code aw_document} that references the upstream commentId.</p>
+ * <p>The file itself is POSTed to the upstream comments API
+ * ({@link MilestoneCommentsClient}). Locally we keep just the upstream
+ * comment id plus enough context to answer "who uploaded what comment for
+ * which activity, when".</p>
  *
- * <p>Order matters: the upstream call runs BEFORE the DB transaction, so
+ * <p>Order matters — the upstream call runs BEFORE the DB transaction, so
  * a failure never leaves an orphan row. If the upstream upload succeeds
- * but the DB save crashes, the comment exists upstream with no local
- * record — we log loudly so it can be reconciled.</p>
+ * but the DB save crashes, the comment exists upstream with no local row;
+ * we log loudly so it can be reconciled.</p>
  */
 @Service
 @Slf4j
@@ -40,29 +41,28 @@ public class DocumentService {
                                           DocumentMetadata meta,
                                           RequestInfo requestInfo) {
 
-        // 1. POST to upstream comments API (outside the DB tx)
+        // 1. POST to upstream — returns the comment id we'll store as docId.
         MilestoneCommentResult stored = milestoneCommentsClient.uploadComment(
                 meta.activityId(), file, meta.comment());
 
-        if (stored.getCommentId() == null) {
+        if (stored.getDocId() == null) {
             throw new IllegalStateException(
-                    "Upstream comments API accepted the upload but returned no commentId");
+                    "Upstream comments API accepted the upload but returned no id");
         }
 
-        // 2. persist the row in its own transaction
+        // 2. Persist locally.
         try {
-            return persistRow(file, meta, requestInfo, stored);
+            return persistRow(meta, requestInfo, stored);
         } catch (Exception ex) {
-            log.error("Document upload SUCCEEDED upstream (commentId={}, milestoneId={}) "
+            log.error("Document upload SUCCEEDED upstream (docId={}, activityId={}) "
                             + "but DB persist FAILED — manual cleanup may be required",
-                    stored.getCommentId(), stored.getMilestoneId(), ex);
+                    stored.getDocId(), stored.getActivityId(), ex);
             throw ex;
         }
     }
 
     @Transactional
-    protected DocumentEntity persistRow(MultipartFile file,
-                                        DocumentMetadata meta,
+    protected DocumentEntity persistRow(DocumentMetadata meta,
                                         RequestInfo requestInfo,
                                         MilestoneCommentResult stored) {
 
@@ -71,19 +71,17 @@ public class DocumentService {
 
         DocumentEntity row = DocumentEntity.builder()
                 .uuid(UUID.randomUUID().toString())
-                .docId(stored.getCommentId())            // upstream commentId is our docId
-                .storeId(stored.getMilestoneId())        // upstream milestoneId is our storeId
-                .fileUrl(stored.getFileUrl())
-                .fileName(file.getOriginalFilename())
-                .contentType(file.getContentType())
-                .fileSize(file.getSize())
-                .documentType(meta.documentType())
-                .activityId(meta.activityId())
+                .docId(stored.getDocId())
+                .activityId(stored.getActivityId() != null
+                        ? stored.getActivityId() : meta.activityId())
                 .projectId(meta.projectId())
                 .businessService(meta.businessService())
                 .processInstanceId(meta.processInstanceId())
+                .documentType(meta.documentType())
                 .uploadedByUuid(u.uuid())
-                .uploadedByUsername(u.username())
+                .uploadedByUsername(stored.getAuthorLogin() != null
+                        ? stored.getAuthorLogin() : u.username())
+                .uploadedByEmail(stored.getAuthorEmail())
                 .uploadedByRoles(u.roles())
                 .comment(meta.comment())
                 .createdAt(now)
@@ -91,9 +89,8 @@ public class DocumentService {
                 .build();
 
         DocumentEntity saved = documentRepository.save(row);
-        log.info("Document persisted: uuid={} commentId={} milestoneId={} activityId={} uploadedBy={}",
-                saved.getUuid(), saved.getDocId(), saved.getStoreId(),
-                saved.getActivityId(), u.uuid());
+        log.info("Document persisted: uuid={} docId={} activityId={} uploadedBy={}",
+                saved.getUuid(), saved.getDocId(), saved.getActivityId(), u.uuid());
         return saved;
     }
 

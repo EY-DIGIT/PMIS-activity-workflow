@@ -25,18 +25,17 @@ import java.util.UUID;
 
 /**
  * Wraps the upstream comments API at
- * {@code POST /projects/api/v3/milestones/{milestoneId}/comments}.
+ * {@code POST /projects/api/v3/activities/{activityId}/comments}.
  *
  * <p>Single responsibility:</p>
  * <ol>
- *   <li>Resolve {@code milestoneId} from an {@code activityId} via the
- *       upstream activity-lookup endpoint.</li>
- *   <li>POST a multipart request with the comment body + file.</li>
- *   <li>Parse the response and return commentId / milestoneId / fileUrl.</li>
+ *   <li>POST a multipart request with the comment body + file directly to
+ *       the activity (no milestoneId lookup needed — the upstream API now
+ *       keys comments by activityId directly).</li>
+ *   <li>Parse the response and return commentId / fileUrl.</li>
  * </ol>
  *
- * <p>The caller's {@code Authorization} header is forwarded verbatim to
- * both upstream calls.</p>
+ * <p>The caller's {@code Authorization} header is forwarded verbatim.</p>
  */
 @Service
 @Slf4j
@@ -59,6 +58,7 @@ public class MilestoneCommentsClient {
                                                 MultipartFile file,
                                                 String commentBody) {
         validateConfig();
+        validateActivityId(activityId);
         validateFile(file);
 
         String auth = currentAuthHeader();
@@ -67,15 +67,14 @@ public class MilestoneCommentsClient {
                     "Authorization header is required to call the comments API");
         }
 
-        // ---- 1. activityId → milestoneId ----
-        String milestoneId = resolveMilestoneId(activityId, auth);
-        log.info("Resolved milestoneId={} for activityId={}", milestoneId, activityId);
-
-        // ---- 2. POST comment + file ----
-        String url = props.getCommentsUrlTemplate().replace("{milestoneId}", milestoneId);
+        // POST comment + file directly using the activityId
+        String url = props.getCommentsUrlTemplate().replace("{activityId}", activityId);
         try {
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
-            body.add(props.getBodyField(), commentBody == null ? "" : commentBody);
+            // 'body' carries the comment text (admin's modal note)
+            body.add(props.getBodyField(),
+                    commentBody == null ? "Document uploaded" : commentBody);
+            // 'files' carries the attached file
             body.add(props.getFilesField(), toFilePart(file));
 
             String raw = milestoneCommentsRestClient.post()
@@ -86,8 +85,9 @@ public class MilestoneCommentsClient {
                     .body(body)
                     .retrieve()
                     .onStatus(HttpStatusCode::isError, (req, resp) -> {
-                        // Surface the upstream error message to the caller
-                        // so they see e.g. "storage_unavailable: Permission denied".
+                        // Surface the upstream error message to the caller so
+                        // operators see e.g. "storage_unavailable: Permission
+                        // denied: /mnt/pmis_files/..." instead of just a 503.
                         String responseBody = new String(resp.getBody().readAllBytes());
                         log.error("Upstream comments API {} returned {}: {}",
                                 url, resp.getStatusCode(), responseBody);
@@ -98,7 +98,7 @@ public class MilestoneCommentsClient {
                     .body(String.class);
 
             log.debug("Upstream comments response: {}", raw);
-            return parseResponse(raw, milestoneId, commentBody);
+            return parseResponse(raw, activityId);
 
         } catch (InvalidTransitionException rethrow) {
             throw rethrow;
@@ -122,6 +122,12 @@ public class MilestoneCommentsClient {
         }
     }
 
+    private void validateActivityId(String activityId) {
+        if (!StringUtils.hasText(activityId)) {
+            throw new InvalidTransitionException("activityId is required");
+        }
+    }
+
     private void validateFile(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new InvalidTransitionException("File is required and must not be empty");
@@ -142,42 +148,6 @@ public class MilestoneCommentsClient {
                 .orElse(null);
     }
 
-    /** Resolve activityId -> milestoneId via the upstream lookup. */
-    private String resolveMilestoneId(String activityId, String auth) {
-        if (!StringUtils.hasText(activityId)) {
-            throw new InvalidTransitionException("activityId is required");
-        }
-        String url = props.getActivityLookupUrlTemplate().replace("{activityId}", activityId);
-        try {
-            String raw = milestoneCommentsRestClient.get()
-                    .uri(url)
-                    .header("Authorization", auth)
-                    .header("accept", "application/json")
-                    .retrieve()
-                    .body(String.class);
-
-            JsonNode root = objectMapper.readTree(raw);
-
-            // Try the common shapes — adjust here if upstream uses a different path.
-            String id = firstNonNullText(root,
-                    "milestoneId",
-                    "data.milestoneId",
-                    "data.milestone.id",
-                    "data.milestone_id");
-            if (!StringUtils.hasText(id)) {
-                throw new IllegalStateException(
-                        "Activity lookup did not contain milestoneId. Body: " + raw);
-            }
-            return id;
-
-        } catch (Exception ex) {
-            log.error("milestoneId lookup failed for activity {}: {}", activityId, ex.getMessage());
-            throw new InvalidTransitionException(
-                    "Could not resolve milestoneId from activityId " + activityId
-                            + ": " + ex.getMessage());
-        }
-    }
-
     /** Wrap multipart bytes as a Spring Resource so the filename survives. */
     private Resource toFilePart(MultipartFile file) throws IOException {
         String filename = StringUtils.hasText(file.getOriginalFilename())
@@ -188,71 +158,66 @@ public class MilestoneCommentsClient {
         };
     }
 
-    /** Pull commentId / fileUrl out of the upstream response. */
-    private MilestoneCommentResult parseResponse(String raw,
-                                                 String milestoneId,
-                                                 String commentBody) throws Exception {
+    /**
+     * Parse the upstream response.
+     *
+     * <p>Expected shape:</p>
+     * <pre>
+     *   {
+     *     "data": {
+     *       "id":       "35d154e9-1a33-409d-9426-383a4c71aad3",
+     *       "targetId": "ab07aec6-b636-4b7e-9383-80e8d647ea16",
+     *       ...everything else we ignore...
+     *     }
+     *   }
+     * </pre>
+     */
+    private MilestoneCommentResult parseResponse(String raw, String activityId) throws Exception {
         JsonNode root = objectMapper.readTree(raw);
+        JsonNode data = root.has("data") && !root.get("data").isNull()
+                ? root.get("data") : root;
 
-        // Try standard wrappers - { "data": {...} } or flat
-        JsonNode data = root.has("data") && !root.get("data").isNull() ? root.get("data") : root;
-
-        String commentId = firstNonNullText(data,
-                "id", "commentId", "comment_id");
-        String fileUrl = firstNonNullText(data,
-                "attachmentUrl", "fileUrl", "file_url",
-                "attachments[0].url", "files[0].url");
-
-        if (!StringUtils.hasText(commentId)) {
-            log.warn("Upstream response had no commentId; raw response: {}", raw);
+        String docId = data.path("id").asText(null);
+        if (!StringUtils.hasText(docId)) {
+            throw new IllegalStateException(
+                    "Upstream comments API returned no 'id'. Raw: " + raw);
         }
 
+        // Prefer targetId from the response (authoritative); fall back to the
+        // activityId we sent in.
+        String returnedTargetId = data.path("targetId").asText(null);
+        String resolvedActivityId = StringUtils.hasText(returnedTargetId)
+                ? returnedTargetId
+                : activityId;
+
+        // Best-effort author info — the upstream knows who its token belongs to.
+        JsonNode author = data.path("author");
+        String authorEmail = author.path("email").asText(null);
+        String authorLogin = author.path("login").asText(null);
+
         return MilestoneCommentResult.builder()
-                .commentId(commentId)
-                .milestoneId(milestoneId)
-                .fileUrl(fileUrl)
-                .commentBody(commentBody)
+                .docId(docId)
+                .activityId(resolvedActivityId)
+                .authorEmail(authorEmail)
+                .authorLogin(authorLogin)
                 .build();
     }
 
-    /**
-     * Walk dot-paths and array-indices like "data.milestone.id" or
-     * "attachments[0].url". Returns the first one with a non-blank value.
-     */
-    private String firstNonNullText(JsonNode root, String... paths) {
-        for (String path : paths) {
-            JsonNode node = walk(root, path);
-            if (node != null && !node.isNull() && StringUtils.hasText(node.asText())) {
-                return node.asText();
-            }
-        }
-        return null;
-    }
-
-    private JsonNode walk(JsonNode root, String path) {
-        JsonNode cur = root;
-        for (String segment : path.split("\\.")) {
-            if (cur == null) return null;
-            if (segment.matches(".*\\[\\d+]$")) {
-                int bracket = segment.lastIndexOf('[');
-                String field = segment.substring(0, bracket);
-                int idx = Integer.parseInt(segment.substring(bracket + 1, segment.length() - 1));
-                cur = cur.path(field);
-                if (!cur.isArray() || idx >= cur.size()) return null;
-                cur = cur.get(idx);
-            } else {
-                cur = cur.path(segment);
-            }
-        }
-        return cur;
-    }
-
-    /** Lift the {@code error.message} field out of the upstream error envelope. */
+    /** Lift a human-readable message out of the upstream error envelope. */
     private String extractError(String responseBody) {
         try {
             JsonNode root = objectMapper.readTree(responseBody);
-            String msg = firstNonNullText(root, "error.message", "message", "error");
-            return StringUtils.hasText(msg) ? msg : responseBody;
+            // Try error.message → message → error, in that order
+            JsonNode errorNode = root.path("error");
+            if (errorNode.isObject()) {
+                String nested = errorNode.path("message").asText(null);
+                if (StringUtils.hasText(nested)) return nested;
+            }
+            String top = root.path("message").asText(null);
+            if (StringUtils.hasText(top)) return top;
+            String err = errorNode.isTextual() ? errorNode.asText() : null;
+            if (StringUtils.hasText(err)) return err;
+            return responseBody;
         } catch (Exception ignore) {
             return responseBody;
         }

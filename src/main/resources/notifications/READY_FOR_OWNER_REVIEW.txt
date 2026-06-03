@@ -1,18 +1,18 @@
 ===SUBJECT===
-Action required: owner review for activity {{activityId}}
+Owner review needed: {{activityDisplayCode}} {{activityName}}
 
 ===BODY===
 Hello {{approverName}},
 
-All concerned-division reviewers have approved the activity below. It is now awaiting your decision as the owner.
+All concerned-division reviewers have approved the activity below. It is now waiting for the activity owner's final review.
 
-  Activity         : {{activityId}}
-  Project          : {{projectId}}
-  Current state    : {{stateName}}
+  Activity         : {{activityDisplayCode}} {{activityName}}
+  Project          : {{projectCode}} {{projectName}}
+  Current state    : {{currentState}}
   Submitted by     : {{submittedBy}}
-  Last action on   : {{actionAt}}
+  Advanced on      : {{actionAt}}
 
-Please log in and approve or return this activity at your earliest convenience.
+Please log in and complete the final approval step.
 
 Regards,
-Activity Workflow
+PMIS UIDAI

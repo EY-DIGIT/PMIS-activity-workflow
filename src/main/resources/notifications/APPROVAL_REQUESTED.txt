@@ -1,13 +1,13 @@
 ===SUBJECT===
-Action required: review activity {{activityId}}
+Action required: review {{activityDisplayCode}} {{activityName}}
 
 ===BODY===
 Hello {{approverName}},
 
 You have been added as a reviewer for the activity below and your approval is requested.
 
-  Activity         : {{activityId}}
-  Project          : {{projectId}}
+  Activity         : {{activityDisplayCode}} {{activityName}}
+  Project          : {{projectCode}} {{projectName}}
   Current state    : {{stateName}}
   Submitted by     : {{submittedBy}}
   Submitted on     : {{submittedAt}}
@@ -17,4 +17,4 @@ Please log in to the system and either approve or reject this activity at your e
 If you have questions about the contents of the activity, please reach out to the submitter directly.
 
 Regards,
-Activity Workflow
+PMIS UIDAI

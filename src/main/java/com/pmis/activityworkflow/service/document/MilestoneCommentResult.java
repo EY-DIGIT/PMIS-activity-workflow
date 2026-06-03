@@ -8,9 +8,11 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * What we extract from a successful upstream comment-with-attachment
- * response. The upstream API returns a Comment object with an attachment
- * URL; we surface the minimum we need to persist locally.
+ * Minimal parsed result from a successful upstream comment upload.
+ *
+ * <p>Only two things are interesting: {@code id} (the upstream comment id,
+ * stored locally as docId) and {@code targetId} (the activity this comment
+ * was attached to).</p>
  */
 @Data
 @Builder
@@ -20,15 +22,15 @@ import lombok.NoArgsConstructor;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class MilestoneCommentResult {
 
-    /** Upstream comment id — we use this as our local docId. */
-    private String commentId;
+    /** Upstream comment id. */
+    private String docId;
 
-    /** Upstream milestone the comment was attached to. */
-    private String milestoneId;
+    /** Activity the upstream comment was attached to (data.targetId). */
+    private String activityId;
 
-    /** Pre-signed or canonical URL to the file. */
-    private String fileUrl;
+    /** Author email (data.author.email) - upstream's view of who uploaded. */
+    private String authorEmail;
 
-    /** What the user typed in the body field, echoed back from the upstream API. */
-    private String commentBody;
+    /** Author username/login (data.author.login). */
+    private String authorLogin;
 }

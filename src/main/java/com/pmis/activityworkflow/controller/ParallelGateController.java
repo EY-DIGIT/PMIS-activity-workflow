@@ -109,6 +109,10 @@ public class ParallelGateController {
 
     /* ==========================================================
      *  Admin toolbar: "Request Division Approval" / "Request Owner Approval"
+     *
+     *  Both endpoints accept multipart/form-data with flat form fields —
+     *  one optional `file` part and individual fields for the metadata.
+     *  Simpler to build in Postman/Swagger than a nested JSON part.
      * ========================================================== */
 
     /**
@@ -137,7 +141,6 @@ public class ParallelGateController {
                 .stateName(stateName)
                 .comment(comment)
                 .build();
-
         return ResponseEntity.ok(approvalRequestService.requestDivisionApproval(body, file));
     }
 
@@ -157,7 +160,7 @@ public class ParallelGateController {
             @RequestParam String businessService,
             @RequestParam String activityId,
             @RequestParam(required = false) String projectId,
-            @RequestParam(defaultValue = "PENDINGATCONCERNEDDIVISION") String stateName,
+            @RequestParam(defaultValue = "PENDINGATOWNERDIVISION") String stateName,
             @RequestParam(required = false) String comment) {
 
         RequestOwnerApprovalRequest body = RequestOwnerApprovalRequest.builder()
@@ -168,12 +171,16 @@ public class ParallelGateController {
                 .stateName(stateName)
                 .comment(comment)
                 .build();
-
         return ResponseEntity.ok(approvalRequestService.requestOwnerApproval(body, file));
     }
 
     /* ----- helper ----- */
 
+    /**
+     * Parse the optional {@code requestInfo} JSON form field. Logs a
+     * warning and returns null on bad JSON rather than failing the
+     * whole request — the downstream service treats null as anonymous.
+     */
     private RequestInfo parseRequestInfo(String json) {
         if (json == null || json.isBlank()) return null;
         try {

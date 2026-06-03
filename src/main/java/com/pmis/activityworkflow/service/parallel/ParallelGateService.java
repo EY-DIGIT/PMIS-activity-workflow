@@ -59,6 +59,12 @@ public class ParallelGateService {
     public static final String VOTE_APPROVED = "APPROVED";
     public static final String VOTE_REJECTED = "REJECTED";
 
+    /** The only parallel state in the workflow — where division votes live. */
+    public static final String GATE_STATE = "PENDINGATCONCERNEDDIVISION";
+
+    /** Pseudo division code we use to store the owner approver in aw_division_user. */
+    public static final String OWNER_DIVISION_CODE = "OWNER";
+
     public static final String NOTIFY_PENDING = "PENDING";
 
     /**
@@ -271,6 +277,13 @@ public class ParallelGateService {
                             + req.getActivityId());
         }
 
+        // Also stash the owner approver as a row under the synthetic 'OWNER'
+        // divisionCode in aw_division_user. They don't vote (so no participant
+        // row gets counted by the gate), but the inbox / detail screens can
+        // find their email + uuid in one place alongside the division
+        // collaborators.
+        appendOwnerApproverAsDivisionUser(req, data);
+
         SeedParticipantsRequest seed = SeedParticipantsRequest.builder()
                 .requestInfo(req.getRequestInfo())
                 .businessService(req.getBusinessService())
@@ -295,6 +308,84 @@ public class ParallelGateService {
     @Transactional
     public List<ParallelParticipantEntity> autoSeedWithoutNotify(AutoSeedRequest req) {
         return autoSeed(req, /* notify */ false);
+    }
+
+    /**
+     * Persist the upstream {@code ownerApprover[0]} as a synthetic division
+     * row under {@link #OWNER_DIVISION_CODE}, seeded at
+     * {@code PENDINGATOWNERDIVISION} (not at the parallel gate state).
+     *
+     * <p>This is the only writer that puts the owner-approver into our
+     * tables — the inbox / detail screens then find owner info alongside
+     * the division collaborators without needing a separate query.</p>
+     *
+     * <p>The owner does NOT vote in the parallel gate; the gate-evaluation
+     * logic only considers rows on {@code PENDINGATCONCERNEDDIVISION} so
+     * this row sits passively until the activity actually reaches
+     * {@code PENDINGATOWNERDIVISION}.</p>
+     */
+    private void appendOwnerApproverAsDivisionUser(AutoSeedRequest req, AssignmentData data) {
+        List<AssignmentData.UserRef> owners = data.getOwnerApprover();
+        if (owners == null || owners.isEmpty()) {
+            log.debug("Upstream returned no ownerApprover - skipping OWNER row");
+            return;
+        }
+        AssignmentData.UserRef owner = owners.get(0);
+        if (owner == null || owner.getId() == null) return;
+
+        long now = System.currentTimeMillis();
+        String ownerState = "PENDINGATOWNERDIVISION";
+
+        // Skip if a row is already there - keeps the call idempotent.
+        boolean alreadyExists = !participantRepository
+                .findByBusinessServiceAndActivityIdAndStateNameAndApproverUserUuid(
+                        req.getBusinessService(), req.getActivityId(),
+                        ownerState, owner.getId()).isEmpty();
+        if (alreadyExists) {
+            log.debug("OWNER participant row already exists for activity {} - skipping",
+                    req.getActivityId());
+            return;
+        }
+
+        ParallelParticipantEntity ownerRow = ParallelParticipantEntity.builder()
+                .uuid(UUID.randomUUID().toString())
+                .businessService(req.getBusinessService())
+                .activityId(req.getActivityId())
+                .projectId(req.getProjectId())
+                .stateName(ownerState)
+                .divisionCode(OWNER_DIVISION_CODE)
+                .divisionName(OWNER_DIVISION_CODE)
+                .approverUserUuid(owner.getId())
+                .approverEmail(owner.getEmail())
+                .approverName(owner.fullName())
+                .voteStatus(VOTE_PENDING)
+                .notifyStatus("PENDING")
+             //   .auditDetails(AuditDetails.builder()
+//                        .createdTime(now)
+//                        .lastModifiedTime(now)
+//                        .build())
+                .build();
+        participantRepository.save(ownerRow);
+
+        // Mirror into aw_division_user so the OWNER row is also discoverable
+        // by collaborator-user queries.
+        DivisionUserEntity ownerAsUser = DivisionUserEntity.builder()
+                .uuid(UUID.randomUUID().toString())
+                .businessService(req.getBusinessService())
+                .activityId(req.getActivityId())
+                .projectId(req.getProjectId())
+                .stateName(ownerState)
+                .divisionCode(OWNER_DIVISION_CODE)
+                .userUuid(owner.getId())
+                .userEmail(owner.getEmail())
+                .userName(owner.fullName())
+                .createdAt(now)
+         //       .updatedAt(now)
+                .build();
+        divisionUserRepository.save(ownerAsUser);
+
+        log.info("OWNER row persisted for activity {}: approver={} email={}",
+                req.getActivityId(), owner.getId(), owner.getEmail());
     }
 
 
@@ -384,13 +475,17 @@ public class ParallelGateService {
 
     /**
      * Admin-initiated counterpart to the (now-removed) auto-fire of
-     * ALL_APPROVED. Verifies every participant has APPROVED, then fires
-     * the transition so the record moves to PENDINGATOWNERDIVISION.
+     * ALL_APPROVED. Verifies every concerned-division approver has APPROVED,
+     * then fires the transition so the record moves to PENDINGATOWNERDIVISION.
+     *
+     * <p>{@code stateName} in the request is the <em>destination</em>
+     * (PENDINGATOWNERDIVISION) — what the UI shows. We always validate
+     * against the gate state {@link #GATE_STATE} regardless.</p>
      *
      * @param businessService workflow definition name
      * @param activityId      the record being advanced
      * @param projectId       optional, carried onto the transition row
-     * @param stateName       the current parallel state (e.g. PENDINGATCONCERNEDDIVISION)
+     * @param stateName       UI-facing destination state name (informational)
      * @param comment         optional admin note attached to the transition
      * @param requestInfo     admin's identity for audit
      */
@@ -402,14 +497,18 @@ public class ParallelGateService {
                                      String comment,
                                      RequestInfo requestInfo) {
 
+        // Always validate against the gate state — the destination state
+        // (typically PENDINGATOWNERDIVISION) has no participant rows yet
+        // and isn't where the approvals live.
         List<ParallelParticipantEntity> rows = participantRepository
                 .findByBusinessServiceAndActivityIdAndStateName(
-                        businessService, activityId, stateName);
+                        businessService, activityId, GATE_STATE);
 
         if (rows.isEmpty()) {
             throw new InvalidTransitionException(
                     "No participants seeded for " + businessService + "/" + activityId
-                            + " at state " + stateName + " - cannot request owner approval");
+                            + " at state " + GATE_STATE
+                            + " - call request-division-approval first");
         }
 
         boolean anyRejected = rows.stream().anyMatch(p -> VOTE_REJECTED.equals(p.getVoteStatus()));
@@ -427,13 +526,16 @@ public class ParallelGateService {
         }
 
         // Build a synthetic CastVoteRequest just so fireSystemAction has the
-        // shape it expects. We do not write any vote.
+        // shape it expects. We do not write any vote. The stateName must be
+        // the gate state — that's where ALL_APPROVED is defined in the
+        // workflow config; the *destination* state lives in the workflow
+        // definition's `nextState`.
         CastVoteRequest synthetic = CastVoteRequest.builder()
                 .requestInfo(requestInfo)
                 .businessService(businessService)
                 .activityId(activityId)
                 .projectId(projectId)
-                .stateName(stateName)
+                .stateName(GATE_STATE)
                 .build();
 
         String adminComment = (comment == null || comment.isBlank())

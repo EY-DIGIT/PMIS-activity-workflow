@@ -81,9 +81,9 @@ public class WorkflowAuditService {
                     .performedByUsername(user.username())
                     .performedByRoles(user.roles())
                     .comment(req.getComment())
-                    .ipAddress(http.ip())
-                    .userAgent(http.userAgent())
-                    .requestPayload(payload)
+               //     .ipAddress(http.ip())
+                //    .userAgent(http.userAgent())
+                //    .requestPayload(payload)
                     .createdTime(now)
                     .build());
         }
@@ -143,9 +143,9 @@ public class WorkflowAuditService {
                 .performedByUsername(user.username())
                 .performedByRoles(user.roles())
                 .comment(req != null ? req.getComment() : null)
-                .ipAddress(http.ip())
-                .userAgent(http.userAgent())
-                .requestPayload(payload)
+               // .ipAddress(http.ip())
+             //   .userAgent(http.userAgent())
+              //  .requestPayload(payload)
                 .createdTime(now)
                 .build();
     }

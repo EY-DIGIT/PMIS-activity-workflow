@@ -56,7 +56,7 @@ public class ApprovalInboxController {
      * screen for one activity: header, project, activity details,
      * organization submission, attachments, per-division status.
      */
-    @GetMapping("/{activityId}")
+    @GetMapping("/{businessService}/{activityId}")
     @Operation(summary = "Full approval-request detail for one activity")
     public ResponseEntity<ApprovalDetailResponse> detail(
             @PathVariable @NotBlank String businessService,

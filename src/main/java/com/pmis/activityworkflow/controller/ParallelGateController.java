@@ -111,21 +111,76 @@ public class ParallelGateController {
      *  Admin toolbar: "Request Division Approval" / "Request Owner Approval"
      * ========================================================== */
 
-	@PostMapping(value = "/request-division-approval", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-	@Operation(summary = "Admin button: seed (if needed) + notify every concerned-division approver")
-	public ResponseEntity<RequestDivisionApprovalResult> requestDivisionApproval(
-			@RequestPart("body") @Valid RequestDivisionApprovalRequest body,
-			@RequestPart(value = "file", required = false) MultipartFile file) {
+    /**
+     * Admin clicks "Request Division Approval" — optionally attaches one
+     * file + comment, both shared with every division approver. Sends
+     * APPROVAL_REQUESTED notifications to all currently-pending division
+     * approvers; persists the uploaded file in {@code aw_document}.
+     */
+    @PostMapping(value = "/request-division-approval",
+                 consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Admin button: seed (if needed) + notify every concerned-division approver")
+    public ResponseEntity<RequestDivisionApprovalResult> requestDivisionApproval(
+            @RequestPart(value = "file", required = false) MultipartFile file,
+            @RequestParam(value = "requestInfo", required = false) String requestInfoJson,
+            @RequestParam String businessService,
+            @RequestParam String activityId,
+            @RequestParam(required = false) String projectId,
+            @RequestParam(required = false) String stateName,
+            @RequestParam(required = false) String comment) {
 
-		return ResponseEntity.ok(approvalRequestService.requestDivisionApproval(body, file));
-	}
+        RequestDivisionApprovalRequest body = RequestDivisionApprovalRequest.builder()
+                .requestInfo(parseRequestInfo(requestInfoJson))
+                .businessService(businessService)
+                .activityId(activityId)
+                .projectId(projectId)
+                .stateName(stateName)
+                .comment(comment)
+                .build();
 
-	@PostMapping(value = "/request-owner-approval", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-	@Operation(summary = "Admin button: advance the activity to the owner-approval stage")
-	public ResponseEntity<RequestOwnerApprovalResult> requestOwnerApproval(
-			@RequestPart("body") @Valid RequestOwnerApprovalRequest body,
-			@RequestPart(value = "file", required = false) MultipartFile file) {
+        return ResponseEntity.ok(approvalRequestService.requestDivisionApproval(body, file));
+    }
 
-		return ResponseEntity.ok(approvalRequestService.requestOwnerApproval(body, file));
-	}
+    /**
+     * Admin clicks "Request Owner Approval" after all divisions have
+     * approved. Optionally attaches one file + comment, both routed to
+     * the owner approver. Validates the gate is fully approved, fires the
+     * ALL_APPROVED transition, then dispatches READY_FOR_OWNER_REVIEW to
+     * the owner.
+     */
+    @PostMapping(value = "/request-owner-approval",
+                 consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Admin button: advance the activity to the owner-approval stage")
+    public ResponseEntity<RequestOwnerApprovalResult> requestOwnerApproval(
+            @RequestPart(value = "file", required = false) MultipartFile file,
+            @RequestParam(value = "requestInfo", required = false) String requestInfoJson,
+            @RequestParam String businessService,
+            @RequestParam String activityId,
+            @RequestParam(required = false) String projectId,
+            @RequestParam(defaultValue = "PENDINGATCONCERNEDDIVISION") String stateName,
+            @RequestParam(required = false) String comment) {
+
+        RequestOwnerApprovalRequest body = RequestOwnerApprovalRequest.builder()
+                .requestInfo(parseRequestInfo(requestInfoJson))
+                .businessService(businessService)
+                .activityId(activityId)
+                .projectId(projectId)
+                .stateName(stateName)
+                .comment(comment)
+                .build();
+
+        return ResponseEntity.ok(approvalRequestService.requestOwnerApproval(body, file));
+    }
+
+    /* ----- helper ----- */
+
+    private RequestInfo parseRequestInfo(String json) {
+        if (json == null || json.isBlank()) return null;
+        try {
+            return objectMapper.readValue(json, RequestInfo.class);
+        } catch (JsonProcessingException ex) {
+            log.warn("Bad 'requestInfo' form field, treating as anonymous: {}", ex.getMessage());
+            return null;
+        }
+    }
 }

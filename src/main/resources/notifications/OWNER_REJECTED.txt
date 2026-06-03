@@ -1,0 +1,18 @@
+===SUBJECT===
+Activity {{activityId}} returned by owner
+
+===BODY===
+Hello {{approverName}},
+
+The owner has returned activity {{activityId}} for revision.
+
+  Activity         : {{activityId}}
+  Project          : {{projectId}}
+  Returned by      : {{actorName}}
+  Returned on      : {{actionAt}}
+  Comment          : {{comment}}
+
+Please log in to review the comments, address them, and mark the activity ready for approval again.
+
+Regards,
+Activity Workflow

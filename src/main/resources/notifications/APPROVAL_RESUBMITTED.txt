@@ -1,0 +1,20 @@
+===SUBJECT===
+Action required (resubmitted): review activity {{activityId}}
+
+===BODY===
+Hello {{approverName}},
+
+The activity below was resubmitted after being revised, and your review is needed again.
+
+  Activity         : {{activityId}}
+  Project          : {{projectId}}
+  Current state    : {{stateName}}
+  Resubmitted by   : {{submittedBy}}
+  Resubmitted on   : {{submittedAt}}
+
+Reviewers who had already approved on a prior round are not being asked again — only you and any other pending reviewer.
+
+Please log in and either approve or reject this revised version.
+
+Regards,
+Activity Workflow

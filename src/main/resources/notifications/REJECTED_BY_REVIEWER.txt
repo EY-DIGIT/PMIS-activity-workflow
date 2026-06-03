@@ -1,0 +1,18 @@
+===SUBJECT===
+Activity {{activityId}} was rejected by a reviewer
+
+===BODY===
+Hello {{approverName}},
+
+A reviewer has rejected activity {{activityId}}. It has been returned for revision.
+
+  Activity         : {{activityId}}
+  Project          : {{projectId}}
+  Rejected by      : {{actorName}}
+  Rejected on      : {{actionAt}}
+  Comment          : {{comment}}
+
+Please log in to view the rejection details, address the feedback, and resubmit when ready.
+
+Regards,
+Activity Workflow

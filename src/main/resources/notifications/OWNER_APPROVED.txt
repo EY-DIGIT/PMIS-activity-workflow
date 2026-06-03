@@ -1,0 +1,18 @@
+===SUBJECT===
+Activity {{activityId}} approved by owner
+
+===BODY===
+Hello {{approverName}},
+
+The owner has approved activity {{activityId}}. The activity will now move forward.
+
+  Activity         : {{activityId}}
+  Project          : {{projectId}}
+  Approved by      : {{actorName}}
+  Approved on      : {{actionAt}}
+  Comment          : {{comment}}
+
+No further action is required from you at this stage.
+
+Regards,
+Activity Workflow

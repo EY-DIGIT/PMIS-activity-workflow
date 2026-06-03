@@ -1,0 +1,16 @@
+===SUBJECT===
+Activity {{activityId}} completed
+
+===BODY===
+Hello {{approverName}},
+
+Activity {{activityId}} has been completed.
+
+  Activity         : {{activityId}}
+  Project          : {{projectId}}
+  Completed on     : {{actionAt}}
+
+No further action is required.
+
+Regards,
+Activity Workflow

@@ -1,0 +1,20 @@
+===SUBJECT===
+Action required: review activity {{activityId}}
+
+===BODY===
+Hello {{approverName}},
+
+You have been added as a reviewer for the activity below and your approval is requested.
+
+  Activity         : {{activityId}}
+  Project          : {{projectId}}
+  Current state    : {{stateName}}
+  Submitted by     : {{submittedBy}}
+  Submitted on     : {{submittedAt}}
+
+Please log in to the system and either approve or reject this activity at your earliest convenience.
+
+If you have questions about the contents of the activity, please reach out to the submitter directly.
+
+Regards,
+Activity Workflow

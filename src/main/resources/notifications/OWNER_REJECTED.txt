@@ -1,18 +1,15 @@
 ===SUBJECT===
-Activity {{activityId}} returned by owner
+Activity rejected by owner: {{activityDisplayCode}} {{activityName}}
 
 ===BODY===
 Hello {{approverName}},
 
-The owner has returned activity {{activityId}} for revision.
+The activity below has been rejected by the activity owner and returned for revision.
 
-  Activity         : {{activityId}}
-  Project          : {{projectId}}
-  Returned by      : {{actorName}}
-  Returned on      : {{actionAt}}
-  Comment          : {{comment}}
-
-Please log in to review the comments, address them, and mark the activity ready for approval again.
+  Activity         : {{activityDisplayCode}} {{activityName}}
+  Project          : {{projectCode}} {{projectName}}
+  Current state    : {{currentState}}
+  Owner comment    : {{comment}}
 
 Regards,
 Activity Workflow

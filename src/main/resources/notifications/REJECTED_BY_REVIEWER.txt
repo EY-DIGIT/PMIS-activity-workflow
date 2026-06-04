@@ -1,18 +1,17 @@
 ===SUBJECT===
-Activity {{activityId}} was rejected by a reviewer
+Activity rejected by a reviewer: {{activityDisplayCode}} {{activityName}}
 
 ===BODY===
 Hello {{approverName}},
 
-A reviewer has rejected activity {{activityId}}. It has been returned for revision.
+The activity below was rejected by one of the concerned-division reviewers and has been returned to the submitter for revision.
 
-  Activity         : {{activityId}}
-  Project          : {{projectId}}
-  Rejected by      : {{actorName}}
-  Rejected on      : {{actionAt}}
-  Comment          : {{comment}}
+  Activity         : {{activityDisplayCode}} {{activityName}}
+  Project          : {{projectCode}} {{projectName}}
+  Current state    : {{currentState}}
+  Reviewer comment : {{comment}}
 
-Please log in to view the rejection details, address the feedback, and resubmit when ready.
+If clarification is needed, please reach out to the reviewer directly.
 
 Regards,
 Activity Workflow

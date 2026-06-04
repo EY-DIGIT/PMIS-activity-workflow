@@ -1,18 +1,16 @@
 ===SUBJECT===
-Activity {{activityId}} approved by owner
+Activity approved by owner: {{activityDisplayCode}} {{activityName}}
 
 ===BODY===
 Hello {{approverName}},
 
-The owner has approved activity {{activityId}}. The activity will now move forward.
+The activity below has been approved by the activity owner.
 
-  Activity         : {{activityId}}
-  Project          : {{projectId}}
-  Approved by      : {{actorName}}
+  Activity         : {{activityDisplayCode}} {{activityName}}
+  Project          : {{projectCode}} {{projectName}}
+  Current state    : {{currentState}}
+  Owner comment    : {{comment}}
   Approved on      : {{actionAt}}
-  Comment          : {{comment}}
-
-No further action is required from you at this stage.
 
 Regards,
 Activity Workflow

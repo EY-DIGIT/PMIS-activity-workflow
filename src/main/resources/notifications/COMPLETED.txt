@@ -1,16 +1,15 @@
 ===SUBJECT===
-Activity {{activityId}} completed
+Activity completed: {{activityDisplayCode}} {{activityName}}
 
 ===BODY===
 Hello {{approverName}},
 
-Activity {{activityId}} has been completed.
+The activity below has completed all approval stages.
 
-  Activity         : {{activityId}}
-  Project          : {{projectId}}
+  Activity         : {{activityDisplayCode}} {{activityName}}
+  Project          : {{projectCode}} {{projectName}}
+  Current state    : {{currentState}}
   Completed on     : {{actionAt}}
-
-No further action is required.
 
 Regards,
 Activity Workflow

@@ -120,6 +120,47 @@ public class NotificationClient {
         }
     }
 
+    /**
+     * Send the same outcome notification to multiple recipients. Each goes
+     * out as its own POST so the rendered greeting carries the right name
+     * and a failure on one does not block the rest.
+     *
+     * <p>Recipients with a blank email are silently skipped. Duplicates
+     * (same email seen more than once) are de-duped here so nobody gets
+     * two copies even if the caller's list overlaps.</p>
+     */
+    public void notifyOutcomeMany(ProcessInstanceEntity transition,
+                                  NotificationEvent event,
+                                  List<Recipient> recipients) {
+
+        if (recipients == null || recipients.isEmpty()) {
+            log.debug("notifyOutcomeMany called with no recipients for {} on activity {} - skipping",
+                    event, transition.getActivityId());
+            return;
+        }
+
+        // De-dup by lowercased email; drop blanks.
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        List<Recipient> unique = recipients.stream()
+                .filter(r -> r != null && !isBlank(r.email()))
+                .filter(r -> seen.add(r.email().trim().toLowerCase()))
+                .toList();
+
+        if (unique.isEmpty()) {
+            log.warn("No recipients with an email for {} on activity {} - skipping",
+                    event, transition.getActivityId());
+            return;
+        }
+
+        if (!canDispatch(event, unique.size())) return;
+
+        for (Recipient r : unique) {
+            // Delegate to the single-recipient path. canDispatch was already
+            // checked above; the per-call check is a cheap no-op.
+            notifyOutcome(transition, event, r);
+        }
+    }
+
     /* ============================================================
      *  HTTP plumbing
      * ============================================================ */
@@ -140,11 +181,21 @@ public class NotificationClient {
     private String post(Map<String, Object> payload) {
         var request = notificationRestClient.post()
                 .uri(props.getUrl())
-                .contentType(MediaType.APPLICATION_JSON);
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON,
+                        MediaType.TEXT_PLAIN,
+                        MediaType.ALL);
         if (!isBlank(props.getAuthToken())) {
             request = request.header("Authorization", "Bearer " + props.getAuthToken());
         }
-        return request.body(payload).retrieve().body(String.class);
+
+        // Read the body as raw bytes regardless of Content-Type — some upstream
+        // servers return application/octet-stream for what is actually text/json,
+        // which the default String converter rejects. Decoding bytes ourselves
+        // sidesteps the converter mismatch.
+        byte[] rawBytes = request.body(payload).retrieve().body(byte[].class);
+        if (rawBytes == null || rawBytes.length == 0) return "";
+        return new String(rawBytes, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     /** Sends the approval-request notification, then writes notify_status back. */

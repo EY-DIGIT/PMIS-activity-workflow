@@ -9,10 +9,9 @@ All concerned-division reviewers have approved the activity below. It is now wai
   Activity         : {{activityDisplayCode}} {{activityName}}
   Project          : {{projectCode}} {{projectName}}
   Current state    : {{currentState}}
-  Submitted by     : {{submittedBy}}
   Advanced on      : {{actionAt}}
 
 Please log in and complete the final approval step.
 
 Regards,
-PMIS UIDAI
+Activity Workflow

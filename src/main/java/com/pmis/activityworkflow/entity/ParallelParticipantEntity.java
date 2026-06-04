@@ -8,6 +8,19 @@ import lombok.*;
  * state_name, approver_user_uuid) tuple is unique — a single user can only
  * be a reviewer once for a given record at a given state.
  *
+ * <p>Lifecycle of a row:
+ * <ol>
+ *   <li>Created when the record enters a parallel state, with
+ *       {@code voteStatus = PENDING}, {@code notifyStatus = PENDING}.</li>
+ *   <li>NotificationClient sends the external notification, then flips
+ *       {@code notifyStatus} to SENT or FAILED.</li>
+ *   <li>The reviewer votes — service flips {@code voteStatus} to
+ *       APPROVED or REJECTED and stamps {@code votedAt}.</li>
+ *   <li>If the gate is re-evaluated (after a reject + re-submit), rows
+ *       whose status is already APPROVED stay untouched ("skipped"
+ *       in the diagram). PENDING rows remain. The REJECTED row is
+ *       reset to PENDING and re-notified.</li>
+ * </ol>
  */
 @Entity
 @Table(name = "aw_parallel_participant",

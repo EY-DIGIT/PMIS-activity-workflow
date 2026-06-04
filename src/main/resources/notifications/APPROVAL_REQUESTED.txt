@@ -9,7 +9,6 @@ You have been added as a reviewer for the activity below and your approval is re
   Activity         : {{activityDisplayCode}} {{activityName}}
   Project          : {{projectCode}} {{projectName}}
   Current state    : {{stateName}}
-  Submitted by     : {{submittedBy}}
   Submitted on     : {{submittedAt}}
 
 Please log in to the system and either approve or reject this activity at your earliest convenience.
@@ -17,4 +16,4 @@ Please log in to the system and either approve or reject this activity at your e
 If you have questions about the contents of the activity, please reach out to the submitter directly.
 
 Regards,
-PMIS UIDAI
+Activity Workflow

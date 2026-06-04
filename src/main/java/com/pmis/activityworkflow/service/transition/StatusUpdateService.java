@@ -1,14 +1,17 @@
 package com.pmis.activityworkflow.service.transition;
 
 import com.pmis.activityworkflow.entity.AuditDetails;
+import com.pmis.activityworkflow.entity.ParallelParticipantEntity;
 import com.pmis.activityworkflow.entity.ProcessInstanceEntity;
 import com.pmis.activityworkflow.mapper.ActivityMapper;
+import com.pmis.activityworkflow.repository.ParallelParticipantRepository;
 import com.pmis.activityworkflow.repository.ProcessInstanceRepository;
 import com.pmis.activityworkflow.service.assignments.ActivityAssignmentsClient;
 import com.pmis.activityworkflow.service.assignments.AssignmentData;
 import com.pmis.activityworkflow.service.notification.NotificationClient;
 import com.pmis.activityworkflow.service.notification.NotificationClient.Recipient;
 import com.pmis.activityworkflow.service.notification.NotificationEvent;
+import com.pmis.activityworkflow.service.users.UserDetailsClient;
 import com.pmis.activityworkflow.web.models.AuditDetailsDTO;
 import com.pmis.activityworkflow.web.models.ProcessInstanceDTO;
 import com.pmis.activityworkflow.web.models.RequestInfo;
@@ -37,9 +40,11 @@ import java.util.Optional;
 public class StatusUpdateService {
 
     private final ProcessInstanceRepository processRepository;
+    private final ParallelParticipantRepository participantRepository;
     private final ActivityMapper mapper;
     private final NotificationClient notificationClient;
     private final ActivityAssignmentsClient assignmentsClient;
+    private final UserDetailsClient userDetailsClient;
 
     @Transactional
     public void updateStatus(RequestInfo requestInfo,
@@ -90,8 +95,159 @@ public class StatusUpdateService {
             return;
         }
 
+        // All rejection variants fan out to:
+        //   - earliest SUBMIT actor (original project admin)
+        //   - latest SUBMIT actor (current project admin, may be same person)
+        //   - the approver rows in the CURRENT state who voted REJECTED
+        // For OWNER_RETURN_TO_DIVISIONS we ALSO notify all concerned-division
+        // approvers (they're about to be asked to vote again).
+        if (event == NotificationEvent.REJECTED_BY_REVIEWER
+                || event == NotificationEvent.OWNER_REJECTED
+                || event == NotificationEvent.OWNER_RETURNED_TO_DIVISIONS) {
+
+            // Owner sent it back for re-vote — flip every approver row back
+            // to PENDING so the gate re-opens. Do this BEFORE notification so
+            // the recipients aren't told to re-vote until their rows are
+            // actually ready to accept a new vote.
+            if (event == NotificationEvent.OWNER_RETURNED_TO_DIVISIONS) {
+                resetDivisionParticipantsToPending(saved);
+            }
+
+            List<Recipient> all = resolveRejectionRecipients(saved, event);
+            notificationClient.notifyOutcomeMany(saved, event, all);
+            return;
+        }
+
         Recipient recipient = resolveRecipient(saved, event, requestInfo);
         notificationClient.notifyOutcome(saved, event, recipient);
+    }
+
+    /**
+     * Reset all concerned-division approver rows to PENDING so the gate
+     * re-opens. Called when the owner clicks "Return to Concerned
+     * Division". APPROVED + REJECTED rows alike flip to PENDING; the
+     * vote comment is cleared so it doesn't carry over from the prior
+     * round. notify_status is reset too so the next request-division-
+     * approval call re-sends emails.
+     */
+    private void resetDivisionParticipantsToPending(ProcessInstanceEntity transition) {
+        List<ParallelParticipantEntity> rows = participantRepository
+                .findByBusinessServiceAndActivityIdAndStateName(
+                        transition.getBusinessService(),
+                        transition.getActivityId(),
+                        "PENDINGATCONCERNEDDIVISION");
+        if (rows.isEmpty()) {
+            log.warn("RETURN_TO_DIVISION fired but no participant rows found for {}/{}",
+                    transition.getBusinessService(), transition.getActivityId());
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        int reset = 0;
+        for (ParallelParticipantEntity p : rows) {
+            p.setVoteStatus("PENDING");
+            p.setVoteComment(null);
+            p.setVotedAt(null);
+            p.setNotifyStatus("PENDING");
+            p.setNotifyError(null);
+            p.setNotifyAttemptedAt(null);
+            p.setUpdatedAt(now);
+            reset++;
+        }
+        participantRepository.saveAll(rows);
+        log.info("Reset {} participant row(s) to PENDING for activity {} after RETURN_TO_DIVISION",
+                reset, transition.getActivityId());
+    }
+
+    /**
+     * Build the rejection recipient list:
+     * <ul>
+     *   <li>The original SUBMIT actor (earliest aw_process_instance row's
+     *       audit_details.created_by). Email resolved via the upstream
+     *       user-lookup API.</li>
+     *   <li>The most-recent SUBMIT actor (may equal the original if no
+     *       resubmits have happened yet).</li>
+     *   <li>Approvers in the rejection state who voted REJECTED.</li>
+     *   <li>For OWNER_RETURNED_TO_DIVISIONS: every concerned-division
+     *       approver row (they're being asked to re-vote).</li>
+     * </ul>
+     */
+    private List<Recipient> resolveRejectionRecipients(ProcessInstanceEntity saved,
+                                                       NotificationEvent event) {
+        List<Recipient> out = new ArrayList<>();
+        String activityId      = saved.getActivityId();
+        String businessService = saved.getBusinessService();
+
+        // 1) Earliest + latest SUBMIT actors. There is at least one SUBMIT row
+        //    (we got to a rejection state, so submission happened).
+        List<ProcessInstanceEntity> submits = processRepository
+                .findByBusinessServiceAndActivityIdOrderByAuditDetails_CreatedTimeAsc(
+                        businessService, activityId)
+                .stream()
+                .filter(p -> "SUBMIT".equalsIgnoreCase(p.getActionName()))
+                .toList();
+        if (!submits.isEmpty()) {
+            addUserAsRecipient(out, submitterUuid(submits.get(0)),                    "earliest SUBMIT actor");
+            if (submits.size() > 1) {
+                addUserAsRecipient(out, submitterUuid(submits.get(submits.size() - 1)), "latest SUBMIT actor");
+            }
+        }
+
+        // 2) Approver rows in the rejection state that voted REJECTED.
+        //    For OWNER_REJECTED / OWNER_RETURNED_TO_DIVISIONS we look at
+        //    PENDINGATOWNERDIVISION. For REJECTED_BY_REVIEWER (concerned
+        //    division rejected) we look at PENDINGATCONCERNEDDIVISION.
+        String rejectingState = (event == NotificationEvent.OWNER_REJECTED
+                              || event == NotificationEvent.OWNER_RETURNED_TO_DIVISIONS)
+                ? "PENDINGATOWNERDIVISION"
+                : "PENDINGATCONCERNEDDIVISION";
+
+        List<ParallelParticipantEntity> approvers = participantRepository
+                .findByBusinessServiceAndActivityIdAndStateName(
+                        businessService, activityId, rejectingState);
+
+        for (ParallelParticipantEntity p : approvers) {
+            if ("REJECTED".equalsIgnoreCase(p.getVoteStatus())) {
+                out.add(new Recipient(p.getApproverUserUuid(), p.getApproverEmail(), p.getApproverName()));
+            }
+        }
+
+        // 3) For owner-return-to-divisions: also notify the concerned-division
+        //    approvers since they are being asked to re-vote.
+        if (event == NotificationEvent.OWNER_RETURNED_TO_DIVISIONS) {
+            List<ParallelParticipantEntity> divisionRows = participantRepository
+                    .findByBusinessServiceAndActivityIdAndStateName(
+                            businessService, activityId, "PENDINGATCONCERNEDDIVISION");
+            for (ParallelParticipantEntity p : divisionRows) {
+                out.add(new Recipient(p.getApproverUserUuid(), p.getApproverEmail(), p.getApproverName()));
+            }
+        }
+
+        log.info("Rejection recipients for {}/{} on event {}: {} total",
+                businessService, activityId, event, out.size());
+        return out;
+    }
+
+    /** Look up a uuid via the upstream user API and add to the recipient list. */
+    private void addUserAsRecipient(List<Recipient> out, String userUuid, String labelForLogs) {
+        if (userUuid == null || userUuid.isBlank()) return;
+        try {
+            UserDetailsClient.UserDetails u = userDetailsClient.fetch(userUuid);
+            if (u != null && u.getEmail() != null && !u.getEmail().isBlank()) {
+                out.add(new Recipient(u.getId(), u.getEmail(), u.bestDisplayName()));
+                log.debug("Added {} (uuid={}, email={}) to rejection recipients",
+                        labelForLogs, u.getId(), u.getEmail());
+            } else {
+                log.warn("User-lookup for {} ({}) returned no email - skipping",
+                        labelForLogs, userUuid);
+            }
+        } catch (Exception ex) {
+            log.warn("User-lookup for {} ({}) failed: {}", labelForLogs, userUuid, ex.getMessage());
+        }
+    }
+
+    private String submitterUuid(ProcessInstanceEntity p) {
+        return p.getAuditDetails() == null ? null : p.getAuditDetails().getCreatedBy();
     }
 
     /**
@@ -115,11 +271,23 @@ public class StatusUpdateService {
         if (action == null) return null;
 
         return switch (action.toUpperCase()) {
-            case "ALL_APPROVED" -> NotificationEvent.READY_FOR_OWNER_REVIEW;
-            case "ANY_REJECTED" -> NotificationEvent.REJECTED_BY_REVIEWER;
-            case "APPROVE"      -> NotificationEvent.OWNER_APPROVED;
-            case "REJECT"       -> NotificationEvent.OWNER_REJECTED;
-            default             -> null;
+            case "ALL_APPROVED"                                       -> NotificationEvent.READY_FOR_OWNER_REVIEW;
+            case "ANY_REJECTED"                                       -> NotificationEvent.REJECTED_BY_REVIEWER;
+            case "APPROVE"                                            -> NotificationEvent.OWNER_APPROVED;
+            // Owner -> READYFORAPPROVAL — vendor/admin must fix and re-submit.
+            // Two spellings supported: the legacy "REJECT" alias, and the
+            // explicit "RETURN_TO_VENDOR" name that the new UI button uses.
+            case "REJECT",
+                 "RETURN_TO_VENDOR",
+                 "RETURNTOVENDOR"                                     -> NotificationEvent.OWNER_REJECTED;
+            // Owner -> PENDINGATCONCERNEDDIVISION — divisions re-evaluate, no re-submit.
+            // Multiple spellings supported for backward compatibility with
+            // earlier workflow definitions.
+            case "RETURN_TO_DIVISION",
+                 "OWNER_RETURN_TO_DIVISIONS",
+                 "RETURNTOCONSERNEDDEVISION",
+                 "RETURNTOCONCERNEDDIVISION"                          -> NotificationEvent.OWNER_RETURNED_TO_DIVISIONS;
+            default                                                   -> null;
         };
     }
 

@@ -188,6 +188,7 @@ public class ParallelGateService {
                             .userEmail(u.getUserEmail())
                             .userName(u.getUserName())
                             .createdAt(now)
+                            .updatedAt(now)
                             .build());
                 }
             }
@@ -336,51 +337,60 @@ public class ParallelGateService {
         long now = System.currentTimeMillis();
         String ownerState = "PENDINGATOWNERDIVISION";
 
-        // Skip if a row is already there - keeps the call idempotent.
-        boolean alreadyExists = !participantRepository
+        // Two independent existence checks so an inconsistent state (one row
+        // present, the other missing — e.g. partial crash on an earlier run)
+        // self-heals on the next auto-seed call. Each insert is conditional.
+        boolean participantExists = !participantRepository
                 .findByBusinessServiceAndActivityIdAndStateNameAndApproverUserUuid(
                         req.getBusinessService(), req.getActivityId(),
                         ownerState, owner.getId()).isEmpty();
-        if (alreadyExists) {
-            log.debug("OWNER participant row already exists for activity {} - skipping",
+        boolean divisionUserExists = !divisionUserRepository
+                .findByBusinessServiceAndActivityIdAndStateNameAndDivisionCodeAndUserUuid(
+                        req.getBusinessService(), req.getActivityId(),
+                        ownerState, OWNER_DIVISION_CODE, owner.getId()).isEmpty();
+
+        if (participantExists && divisionUserExists) {
+            log.debug("OWNER rows already complete for activity {} - skipping",
                     req.getActivityId());
             return;
         }
 
-        ParallelParticipantEntity ownerRow = ParallelParticipantEntity.builder()
-                .uuid(UUID.randomUUID().toString())
-                .businessService(req.getBusinessService())
-                .activityId(req.getActivityId())
-                .projectId(req.getProjectId())
-                .stateName(ownerState)
-                .divisionCode(OWNER_DIVISION_CODE)
-                .divisionName(OWNER_DIVISION_CODE)
-                .approverUserUuid(owner.getId())
-                .approverEmail(owner.getEmail())
-                .approverName(owner.fullName())
-                .voteStatus(VOTE_PENDING)
-                .notifyStatus("PENDING")
-                .createdAt(now)
-                .updatedAt(now)
-                .build();
-        participantRepository.save(ownerRow);
+        if (!participantExists) {
+            ParallelParticipantEntity ownerRow = ParallelParticipantEntity.builder()
+                    .uuid(UUID.randomUUID().toString())
+                    .businessService(req.getBusinessService())
+                    .activityId(req.getActivityId())
+                    .projectId(req.getProjectId())
+                    .stateName(ownerState)
+                    .divisionCode(OWNER_DIVISION_CODE)
+                    .divisionName(OWNER_DIVISION_CODE)
+                    .approverUserUuid(owner.getId())
+                    .approverEmail(owner.getEmail())
+                    .approverName(owner.fullName())
+                    .voteStatus(VOTE_PENDING)
+                    .notifyStatus("PENDING")
+                    .createdAt(now)
+                    .updatedAt(now)
+                    .build();
+            participantRepository.save(ownerRow);
+        }
 
-        // Mirror into aw_division_user so the OWNER row is also discoverable
-        // by collaborator-user queries.
-        DivisionUserEntity ownerAsUser = DivisionUserEntity.builder()
-                .uuid(UUID.randomUUID().toString())
-                .businessService(req.getBusinessService())
-                .activityId(req.getActivityId())
-                .projectId(req.getProjectId())
-                .stateName(ownerState)
-                .divisionCode(OWNER_DIVISION_CODE)
-                .userUuid(owner.getId())
-                .userEmail(owner.getEmail())
-                .userName(owner.fullName())
-                .createdAt(now)
-                .updatedAt(now)
-                .build();
-        divisionUserRepository.save(ownerAsUser);
+        if (!divisionUserExists) {
+            DivisionUserEntity ownerAsUser = DivisionUserEntity.builder()
+                    .uuid(UUID.randomUUID().toString())
+                    .businessService(req.getBusinessService())
+                    .activityId(req.getActivityId())
+                    .projectId(req.getProjectId())
+                    .stateName(ownerState)
+                    .divisionCode(OWNER_DIVISION_CODE)
+                    .userUuid(owner.getId())
+                    .userEmail(owner.getEmail())
+                    .userName(owner.fullName())
+                    .createdAt(now)
+                    .updatedAt(now)
+                    .build();
+            divisionUserRepository.save(ownerAsUser);
+        }
 
         log.info("OWNER row persisted for activity {}: approver={} email={}",
                 req.getActivityId(), owner.getId(), owner.getEmail());

@@ -24,6 +24,13 @@ public enum NotificationEvent {
     /** Owner rejected — informs the requester. */
     OWNER_REJECTED,
 
+    /**
+     * Owner explicitly sent the activity back to the concerned divisions
+     * for re-evaluation (not a full restart). Notifies the requester +
+     * every concerned-division approver so they know to re-vote.
+     */
+    OWNER_RETURNED_TO_DIVISIONS,
+
     /** Workflow reached terminal state. */
     COMPLETED
 }

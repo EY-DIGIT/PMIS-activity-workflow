@@ -1,0 +1,17 @@
+===SUBJECT===
+Owner sent back for division re-review: {{activityDisplayCode}} {{activityName}}
+
+===BODY===
+Hello {{approverName}},
+
+The activity owner has returned the activity below to the concerned divisions for re-evaluation. No fix-and-resubmit is needed — please review the activity again and either approve or reject.
+
+  Activity         : {{activityDisplayCode}} {{activityName}}
+  Project          : {{projectCode}} {{projectName}}
+  Current state    : {{currentState}}
+  Owner comment    : {{comment}}
+
+Please log in and complete your review.
+
+Regards,
+Activity Workflow

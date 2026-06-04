@@ -360,10 +360,8 @@ public class ParallelGateService {
                 .approverName(owner.fullName())
                 .voteStatus(VOTE_PENDING)
                 .notifyStatus("PENDING")
-             //   .auditDetails(AuditDetails.builder()
-//                        .createdTime(now)
-//                        .lastModifiedTime(now)
-//                        .build())
+                .createdAt(now)
+                .updatedAt(now)
                 .build();
         participantRepository.save(ownerRow);
 
@@ -380,7 +378,7 @@ public class ParallelGateService {
                 .userEmail(owner.getEmail())
                 .userName(owner.fullName())
                 .createdAt(now)
-         //       .updatedAt(now)
+                .updatedAt(now)
                 .build();
         divisionUserRepository.save(ownerAsUser);
 

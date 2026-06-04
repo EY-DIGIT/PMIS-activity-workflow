@@ -66,4 +66,7 @@ public class DivisionUserEntity {
 
     @Column(name = "created_at", nullable = false)
     private Long createdAt;
+    
+    @Column(name = "updated_at")
+    private Long updatedAt;
 }

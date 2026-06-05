@@ -2,12 +2,15 @@ package com.pmis.activityworkflow.service.parallel;
 
 import com.pmis.activityworkflow.entity.DocumentEntity;
 import com.pmis.activityworkflow.entity.ParallelParticipantEntity;
+import com.pmis.activityworkflow.entity.ProcessInstanceEntity;
 import com.pmis.activityworkflow.exception.InvalidTransitionException;
 import com.pmis.activityworkflow.repository.ParallelParticipantRepository;
 import com.pmis.activityworkflow.repository.ProcessInstanceRepository;
 import com.pmis.activityworkflow.service.document.DocumentService;
 import com.pmis.activityworkflow.service.document.DocumentService.DocumentMetadata;
 import com.pmis.activityworkflow.service.notification.NotificationClient;
+import com.pmis.activityworkflow.service.audit.WorkflowAuditService;
+import com.pmis.activityworkflow.service.audit.WorkflowAuditService.ButtonAuditContext;
 import com.pmis.activityworkflow.web.models.RequestInfo;
 import com.pmis.activityworkflow.web.request.AutoSeedRequest;
 import com.pmis.activityworkflow.web.request.RequestDivisionApprovalRequest;
@@ -56,6 +59,7 @@ public class ApprovalRequestService {
     private final ProcessInstanceRepository processRepository;
     private final NotificationClient notificationClient;
     private final ParallelGateService parallelGateService;
+    private final WorkflowAuditService auditService;
 
     /* ============================================================
      *  Request Division Approval
@@ -69,6 +73,19 @@ public class ApprovalRequestService {
         //    Order: explicit request value → current state on aw_process_instance
         //    → PENDINGATCONCERNEDDIVISION default.
         String stateName = resolveStateName(req);
+
+        // Audit the button click up-front. Uses REQUIRES_NEW so the entry
+        // survives even if seeding/notification rolls back later.
+        auditService.recordButtonClick(new ButtonAuditContext(
+                "REQUEST_DIVISION_APPROVAL",
+                req.getBusinessService(),
+                req.getActivityId(),
+                req.getProjectId(),
+                stateName,
+                "activity-workflow",
+                req.getComment(),
+                req.getRequestInfo(),
+                req));
 
         // 1. Optional upload first — outside any tx-sensitive work.
         DocumentEntity doc = uploadIfPresent(file, req.getRequestInfo(),
@@ -119,23 +136,110 @@ public class ApprovalRequestService {
                             + req.getActivityId() + " - upstream assignments returned nothing");
         }
 
+        // 2b. If the activity got here via the path
+        //     PENDINGATOWNERDIVISION ──RETURN_TO_VENDOR──> READYFORAPPROVAL ──SUBMIT──> PENDINGATCONCERNEDDIVISION,
+        //     the divisions should re-vote from scratch — vendor reworked the
+        //     deliverable. Reset every approver row to PENDING so all of them
+        //     get a fresh approval-request email (not just the never-voted ones).
+        boolean resetAfterOwnerReject = false;
+        if (!seeded && isResubmitAfterOwnerReject(req)) {
+            resetAfterOwnerReject = resetApproversToPending(approvers);
+            // Re-read so 'toNotify' sees the updated voteStatus values.
+            approvers = participantRepository
+                    .findByBusinessServiceAndActivityIdAndStateName(
+                            req.getBusinessService(),
+                            req.getActivityId(),
+                            stateName);
+        }
+
         // 3. Notify every currently-PENDING approver.
-        //    On a re-send, already-APPROVED rows are skipped (they're not PENDING).
+        //    On a normal re-send, already-APPROVED rows are skipped (still APPROVED).
+        //    After an owner-reject reset, every row is PENDING — everyone re-emailed.
         List<ParallelParticipantEntity> toNotify = approvers.stream()
                 .filter(p -> ParallelGateService.VOTE_PENDING.equals(p.getVoteStatus()))
                 .toList();
 
-        notificationClient.notifyApprovalRequested(toNotify, /* isResubmission */ false);
+        notificationClient.notifyApprovalRequested(toNotify, /* isResubmission */ resetAfterOwnerReject);
 
         log.info("Division approval requested by admin for activity {} (state {}) - "
-                        + "{} approver(s) total, {} notified{}{}",
+                        + "{} approver(s) total, {} notified{}{}{}",
                 req.getActivityId(), stateName,
                 approvers.size(), toNotify.size(),
                 seeded ? ", just seeded" : "",
+                resetAfterOwnerReject ? ", reset-after-owner-reject" : "",
                 doc == null ? "" : ", attached doc " + doc.getUuid());
 
         return new RequestDivisionApprovalResult(
                 doc, approvers.size(), toNotify.size(), seeded);
+    }
+
+    /**
+     * True when the activity's history shows it just came back from the
+     * owner via RETURN_TO_VENDOR (or REJECT, the legacy alias) and was
+     * then re-SUBMITted. Walks {@code aw_process_instance} oldest→newest
+     * and looks for a RETURN_TO_VENDOR followed by a SUBMIT with no
+     * intervening ALL_APPROVED.
+     *
+     * <p>That last condition matters: once the divisions re-approve and
+     * the activity advances back to the owner, we shouldn't keep
+     * treating subsequent calls as "post-owner-reject" forever.</p>
+     */
+    private boolean isResubmitAfterOwnerReject(RequestDivisionApprovalRequest req) {
+        List<ProcessInstanceEntity> history = processRepository
+                .findByBusinessServiceAndActivityIdOrderByAuditDetails_CreatedTimeAsc(
+                        req.getBusinessService(), req.getActivityId());
+        if (history.isEmpty()) return false;
+
+        boolean ownerReturnedToVendor = false;
+        for (ProcessInstanceEntity p : history) {
+            String action = p.getActionName();
+            if (action == null) continue;
+            switch (action.toUpperCase()) {
+                case "RETURN_TO_VENDOR",
+                     "RETURNTOVENDOR",
+                     "REJECT"           -> ownerReturnedToVendor = true;
+                // ALL_APPROVED past a RETURN_TO_VENDOR means the divisions
+                // already re-approved once - we're not in the post-reject
+                // window anymore.
+                case "ALL_APPROVED"     -> ownerReturnedToVendor = false;
+                default                 -> { /* SUBMIT, votes, etc — irrelevant */ }
+            }
+        }
+
+        // The latest row should be a SUBMIT (that's what just placed us
+        // on PENDINGATCONCERNEDDIVISION).
+        ProcessInstanceEntity latest = history.get(history.size() - 1);
+        boolean latestIsSubmit = latest.getActionName() != null
+                && latest.getActionName().equalsIgnoreCase("SUBMIT");
+
+        return ownerReturnedToVendor && latestIsSubmit;
+    }
+
+    /**
+     * Flip every approver row to PENDING and clear the per-vote fields.
+     * Returns true if any row was actually changed.
+     */
+    private boolean resetApproversToPending(List<ParallelParticipantEntity> approvers) {
+        long now = System.currentTimeMillis();
+        boolean changed = false;
+        for (ParallelParticipantEntity p : approvers) {
+            if (!ParallelGateService.VOTE_PENDING.equals(p.getVoteStatus())) {
+                p.setVoteStatus(ParallelGateService.VOTE_PENDING);
+                p.setVoteComment(null);
+                p.setVotedAt(null);
+                p.setNotifyStatus("PENDING");
+                p.setNotifyError(null);
+                p.setNotifyAttemptedAt(null);
+                p.setUpdatedAt(now);
+                changed = true;
+            }
+        }
+        if (changed) {
+            participantRepository.saveAll(approvers);
+            log.info("Reset {} approver row(s) to PENDING after owner-reject re-submit",
+                    approvers.size());
+        }
+        return changed;
     }
 
     /**
@@ -167,6 +271,22 @@ public class ApprovalRequestService {
     public RequestOwnerApprovalResult requestOwnerApproval(
             RequestOwnerApprovalRequest req,
             MultipartFile file) {
+
+        // Audit the click. This logs the BUTTON_CLICK; the subsequent
+        // ALL_APPROVED transition will produce its own SUCCESS audit row.
+        // So in the trail you'll see two rows for one click:
+        //   1) BUTTON_CLICK action=REQUEST_OWNER_APPROVAL
+        //   2) SUCCESS      action=ALL_APPROVED
+        auditService.recordButtonClick(new ButtonAuditContext(
+                "REQUEST_OWNER_APPROVAL",
+                req.getBusinessService(),
+                req.getActivityId(),
+                req.getProjectId(),
+                req.getStateName(),
+                "activity-workflow",
+                req.getComment(),
+                req.getRequestInfo(),
+                req));
 
         // 1. Optional upload — same shape as division side.
         DocumentEntity doc = uploadIfPresent(file, req.getRequestInfo(),

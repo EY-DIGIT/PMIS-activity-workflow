@@ -46,9 +46,55 @@ public class WorkflowAuditService {
 
     private static final String SUCCESS = "SUCCESS";
     private static final String FAILED  = "FAILED";
+    /** Non-transition admin/user action — e.g. button click, vote cast. */
+    private static final String BUTTON  = "BUTTON_CLICK";
 
     private final WorkflowAuditRepository auditRepository;
     private final ObjectMapper objectMapper;
+
+    /* ============================================================
+     *  BUTTON CLICK — non-transition user action (admin buttons, votes)
+     *  Uses REQUIRES_NEW so it commits even if the surrounding business
+     *  transaction rolls back later (e.g. the gate detects a problem after
+     *  the audit row is written).
+     * ============================================================ */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordButtonClick(ButtonAuditContext ctx) {
+        try {
+            HttpMeta http = httpMeta();
+            UserSnapshot user = userSnapshot(ctx.requestInfo());
+            String payload = serializeAny(ctx.payloadForAudit());
+
+            WorkflowAuditEntity row = WorkflowAuditEntity.builder()
+                    .uuid(UUID.randomUUID().toString())
+                    .businessService(ctx.businessService())
+                    .activityId(ctx.activityId())
+                    .projectId(ctx.projectId())
+                    .moduleName(ctx.moduleName())
+                    .actionName(ctx.buttonName())          // e.g. "REQUEST_DIVISION_APPROVAL"
+                    .previousState(ctx.stateName())
+                    .resultantState(ctx.stateName())       // button clicks don't move state
+                    .outcome(BUTTON)
+                    .errorMessage(null)
+                    .performedByUuid(user.uuid())
+                    .performedByUsername(user.username())
+                    .performedByRoles(user.roles())
+                    .comment(ctx.comment())
+                    .ipAddress(http.ip())
+                    .userAgent(http.userAgent())
+        //            .requestPayload(payload)
+                    .createdTime(System.currentTimeMillis())
+                    .build();
+
+            auditRepository.save(row);
+            log.info("Audit: recorded BUTTON_CLICK '{}' for activity {} by {}",
+                    ctx.buttonName(), ctx.activityId(), user.uuid());
+        } catch (Exception ex) {
+            // Auditing failures must never break the main flow.
+            log.warn("Audit: failed to record BUTTON_CLICK '{}' for activity {}: {}",
+                    ctx.buttonName(), ctx.activityId(), ex.getMessage());
+        }
+    }
 
     /* ============================================================
      *  SUCCESS — joins the transition's transaction (atomic)
@@ -82,7 +128,7 @@ public class WorkflowAuditService {
                     .comment(req.getComment())
                     .ipAddress(http.ip())
                     .userAgent(http.userAgent())
-                    .requestPayload(payload)
+        //            .requestPayload(payload)
                     .createdTime(now)
                     .build());
         }
@@ -144,7 +190,7 @@ public class WorkflowAuditService {
                 .comment(req != null ? req.getComment() : null)
                 .ipAddress(http.ip())
                 .userAgent(http.userAgent())
-                .requestPayload(payload)
+          //      .requestPayload(payload)
                 .createdTime(now)
                 .build();
     }
@@ -164,6 +210,17 @@ public class WorkflowAuditService {
             return objectMapper.writeValueAsString(root);
         } catch (Exception e) {
             log.debug("Audit: could not serialize request payload: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** Serialize an arbitrary object to JSON. Never throws. */
+    private String serializeAny(Object obj) {
+        if (obj == null) return null;
+        try {
+            return objectMapper.writeValueAsString(obj);
+        } catch (Exception e) {
+            log.debug("Audit: could not serialize payload: {}", e.getMessage());
             return null;
         }
     }
@@ -204,4 +261,30 @@ public class WorkflowAuditService {
     /* small value carriers */
     private record UserSnapshot(String uuid, String username, List<String> roles) {}
     private record HttpMeta(String ip, String userAgent) {}
+
+    /**
+     * Carrier for the bits {@link #recordButtonClick} needs. Public so
+     * callers (admin button endpoints, vote endpoint) can build it from
+     * their own request shapes.
+     *
+     * @param buttonName         a short stable name, e.g. "REQUEST_DIVISION_APPROVAL"
+     * @param businessService    "ACTIVITY"
+     * @param activityId         which activity the click acted on
+     * @param projectId          parent project, if known
+     * @param stateName          the state the activity was in when clicked
+     * @param moduleName         optional - the calling module
+     * @param comment            optional admin/user note
+     * @param requestInfo        the caller's RequestInfo (for uuid/username/roles)
+     * @param payloadForAudit    optional full request payload to capture
+     */
+    public record ButtonAuditContext(
+            String buttonName,
+            String businessService,
+            String activityId,
+            String projectId,
+            String stateName,
+            String moduleName,
+            String comment,
+            RequestInfo requestInfo,
+            Object payloadForAudit) {}
 }

@@ -8,6 +8,7 @@ import com.pmis.activityworkflow.repository.ParallelParticipantRepository;
 import com.pmis.activityworkflow.service.WorkflowTransitionService;
 import com.pmis.activityworkflow.service.assignments.ActivityAssignmentsClient;
 import com.pmis.activityworkflow.service.assignments.AssignmentData;
+import com.pmis.activityworkflow.service.audit.WorkflowAuditService;
 import com.pmis.activityworkflow.service.notification.NotificationClient;
 import com.pmis.activityworkflow.web.models.DivisionInput;
 import com.pmis.activityworkflow.web.models.DivisionUserInput;
@@ -79,6 +80,7 @@ public class ParallelGateService {
     private final NotificationClient notificationClient;
     private final WorkflowTransitionService transitionService;
     private final ActivityAssignmentsClient assignmentsClient;
+    private final WorkflowAuditService auditService;
 
     /* ==========================================================
      *  SEED participants on entry (or re-entry) to a parallel state
@@ -435,6 +437,19 @@ public class ParallelGateService {
 
         log.info("Vote recorded: user={} activityId={} state={} vote={}",
                 voterUuid, req.getActivityId(), req.getStateName(), req.getVote());
+
+        // Audit the vote click as a BUTTON_CLICK. The action name encodes
+        // whether it was APPROVED or REJECTED so it's queryable directly.
+        auditService.recordButtonClick(new WorkflowAuditService.ButtonAuditContext(
+                "VOTE_" + req.getVote(),                          // VOTE_APPROVED / VOTE_REJECTED
+                req.getBusinessService(),
+                req.getActivityId(),
+                req.getProjectId(),
+                req.getStateName(),
+                "activity-workflow",
+                req.getComment(),
+                req.getRequestInfo(),
+                req));
 
         // After each vote, re-evaluate the gate.
         evaluateGate(req);

@@ -95,8 +95,8 @@ public class WorkflowAuditEntity {
     private String userAgent;
 
     /** Full request envelope as JSON, with authToken redacted. */
-    @Column(name = "request_payload", columnDefinition = "text")
-    private String requestPayload;
+//    @Column(name = "request_payload", columnDefinition = "text")
+//    private String requestPayload;
 
     /* ---- when ---- */
 

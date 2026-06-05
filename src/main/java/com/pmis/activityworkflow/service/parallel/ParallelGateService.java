@@ -16,6 +16,7 @@ import com.pmis.activityworkflow.web.models.ParticipantInput;
 import com.pmis.activityworkflow.web.models.ProcessInstanceDTO;
 import com.pmis.activityworkflow.web.models.RequestInfo;
 import com.pmis.activityworkflow.web.models.UserInfo;
+import com.pmis.activityworkflow.web.response.GateStatusResponse;
 import com.pmis.activityworkflow.web.request.AutoSeedRequest;
 import com.pmis.activityworkflow.web.request.CastVoteRequest;
 import com.pmis.activityworkflow.web.request.SeedParticipantsRequest;
@@ -398,6 +399,68 @@ public class ParallelGateService {
                 req.getActivityId(), owner.getId(), owner.getEmail());
     }
 
+    /* ==========================================================
+     *  Gate status — read-only snapshot for the UI
+     * ========================================================== */
+
+    /**
+     * Build a snapshot of the concerned-division gate. Defaults the
+     * state to {@link #GATE_STATE} ({@code PENDINGATCONCERNEDDIVISION}).
+     *
+     * <p>{@code readyForOwner} is true iff every approver row has
+     * {@code voteStatus = APPROVED} and there is at least one approver.</p>
+     */
+    public GateStatusResponse gateStatus(String businessService,
+                                         String activityId,
+                                         String stateName) {
+
+        String resolvedState = (stateName == null || stateName.isBlank())
+                ? GATE_STATE
+                : stateName;
+
+        List<ParallelParticipantEntity> rows = participantRepository
+                .findByBusinessServiceAndActivityIdAndStateName(
+                        businessService, activityId, resolvedState);
+
+        int approved = 0, pending = 0, rejected = 0;
+        for (ParallelParticipantEntity p : rows) {
+            switch (p.getVoteStatus()) {
+                case VOTE_APPROVED -> approved++;
+                case VOTE_REJECTED -> rejected++;
+                default            -> pending++;
+            }
+        }
+
+        int total = rows.size();
+        boolean readyForOwner = total > 0 && approved == total;
+
+        List<GateStatusResponse.DivisionStatus> divisions = rows.stream()
+                .map(p -> GateStatusResponse.DivisionStatus.builder()
+                        .divisionCode(p.getDivisionCode())
+                        .divisionName(p.getDivisionName())
+                        .approverUserUuid(p.getApproverUserUuid())
+                        .approverName(p.getApproverName())
+                        .approverEmail(p.getApproverEmail())
+                        .voteStatus(p.getVoteStatus())
+                        .voteComment(p.getVoteComment())
+                        .votedAt(p.getVotedAt())
+                        .build())
+                .toList();
+
+        return GateStatusResponse.builder()
+                .businessService(businessService)
+                .activityId(activityId)
+                .stateName(resolvedState)
+                .totalApprovers(total)
+                .approvedCount(approved)
+                .pendingCount(pending)
+                .rejectedCount(rejected)
+                .readyForOwner(readyForOwner)
+                .hasRejection(rejected > 0)
+                .divisions(divisions)
+                .build();
+    }
+
 
     /* ==========================================================
      *  Reviewer casts a vote
@@ -490,6 +553,23 @@ public class ParallelGateService {
         log.info("Gate READY: {}/{}/{} - all participants approved; "
                 + "awaiting admin 'Request Owner Approval' action",
                 req.getBusinessService(), req.getActivityId(), req.getStateName());
+
+        // Audit a single GATE_READY row so the trail clearly answers
+        // "when did every division finish approving?". The comment lists
+        // each approver so you can see at a glance who completed the gate.
+        String approversSummary = all.stream()
+                .map(p -> p.getDivisionCode() + ":" + p.getApproverUserUuid())
+                .collect(java.util.stream.Collectors.joining(", "));
+        auditService.recordButtonClick(new WorkflowAuditService.ButtonAuditContext(
+                "GATE_READY",
+                req.getBusinessService(),
+                req.getActivityId(),
+                req.getProjectId(),
+                req.getStateName(),
+                "activity-workflow",
+                "All " + all.size() + " division approver(s) have approved: " + approversSummary,
+                req.getRequestInfo(),
+                null));
     }
 
     /* ==========================================================

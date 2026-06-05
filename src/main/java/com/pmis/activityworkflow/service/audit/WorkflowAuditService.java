@@ -80,9 +80,9 @@ public class WorkflowAuditService {
                     .performedByUsername(user.username())
                     .performedByRoles(user.roles())
                     .comment(ctx.comment())
-                    .ipAddress(http.ip())
-                    .userAgent(http.userAgent())
-        //            .requestPayload(payload)
+//                    .ipAddress(http.ip())
+//                    .userAgent(http.userAgent())
+//                    .requestPayload(payload)
                     .createdTime(System.currentTimeMillis())
                     .build();
 
@@ -98,42 +98,51 @@ public class WorkflowAuditService {
 
     /* ============================================================
      *  SUCCESS — joins the transition's transaction (atomic)
+     *
+     *  Any exception inside is caught and logged — auditing must never
+     *  break the actual transition. The transition is the source of
+     *  truth; if a single audit row fails to persist, that's a P3
+     *  reconciliation issue, not a workflow blocker.
      * ============================================================ */
     @Transactional
     public void recordSuccess(TransitionRequest request,
                               List<ProcessStateAndAction> tuples) {
+        try {
+            String payload = serializeRedacted(request);
+            HttpMeta http = httpMeta();
+            UserSnapshot user = userSnapshot(request.getRequestInfo());
+            long now = System.currentTimeMillis();
 
-        String payload = serializeRedacted(request);
-        HttpMeta http = httpMeta();
-        UserSnapshot user = userSnapshot(request.getRequestInfo());
-        long now = System.currentTimeMillis();
-
-        List<WorkflowAuditEntity> rows = new ArrayList<>(tuples.size());
-        for (ProcessStateAndAction tuple : tuples) {
-            ProcessInstanceDTO req = tuple.getProcessInstanceFromRequest();
-            rows.add(WorkflowAuditEntity.builder()
-                    .uuid(UUID.randomUUID().toString())
-                    .businessService(req.getBusinessService())
-                    .activityId(req.getActivityId())
-                    .projectId(req.getProjectId())
-                    .moduleName(req.getModuleName())
-                    .actionName(tuple.getAction() != null ? tuple.getAction().getActionName() : req.getAction())
-                    .previousState(tuple.getCurrentState() != null ? tuple.getCurrentState().getStateName() : null)
-                    .resultantState(tuple.getResultantState() != null ? tuple.getResultantState().getStateName() : null)
-                    .outcome(SUCCESS)
-                    .errorMessage(null)
-                    .performedByUuid(user.uuid())
-                    .performedByUsername(user.username())
-                    .performedByRoles(user.roles())
-                    .comment(req.getComment())
-                    .ipAddress(http.ip())
-                    .userAgent(http.userAgent())
-        //            .requestPayload(payload)
-                    .createdTime(now)
-                    .build());
+            List<WorkflowAuditEntity> rows = new ArrayList<>(tuples.size());
+            for (ProcessStateAndAction tuple : tuples) {
+                ProcessInstanceDTO req = tuple.getProcessInstanceFromRequest();
+                rows.add(WorkflowAuditEntity.builder()
+                        .uuid(UUID.randomUUID().toString())
+                        .businessService(req.getBusinessService())
+                        .activityId(req.getActivityId())
+                        .projectId(req.getProjectId())
+                        .moduleName(req.getModuleName())
+                        .actionName(tuple.getAction() != null ? tuple.getAction().getActionName() : req.getAction())
+                        .previousState(tuple.getCurrentState() != null ? tuple.getCurrentState().getStateName() : null)
+                        .resultantState(tuple.getResultantState() != null ? tuple.getResultantState().getStateName() : null)
+                        .outcome(SUCCESS)
+                        .errorMessage(null)
+                        .performedByUuid(user.uuid())
+                        .performedByUsername(user.username())
+                        .performedByRoles(user.roles())
+                        .comment(req.getComment())
+//                        .ipAddress(http.ip())
+//                        .userAgent(http.userAgent())
+//                        .requestPayload(payload)
+                        .createdTime(now)
+                        .build());
+            }
+            auditRepository.saveAll(rows);
+            log.info("Audit: recorded {} SUCCESS transition attempt(s)", rows.size());
+        } catch (Exception ex) {
+            log.error("Audit: failed to record SUCCESS transition - transition itself is unaffected: {}",
+                    ex.getMessage(), ex);
         }
-        auditRepository.saveAll(rows);
-        log.info("Audit: recorded {} SUCCESS transition attempt(s)", rows.size());
     }
 
     /* ============================================================
@@ -188,9 +197,9 @@ public class WorkflowAuditService {
                 .performedByUsername(user.username())
                 .performedByRoles(user.roles())
                 .comment(req != null ? req.getComment() : null)
-                .ipAddress(http.ip())
-                .userAgent(http.userAgent())
-          //      .requestPayload(payload)
+//                .ipAddress(http.ip())
+//                .userAgent(http.userAgent())
+//                .requestPayload(payload)
                 .createdTime(now)
                 .build();
     }

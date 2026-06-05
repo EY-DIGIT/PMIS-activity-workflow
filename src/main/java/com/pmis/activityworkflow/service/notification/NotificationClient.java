@@ -189,13 +189,28 @@ public class NotificationClient {
             request = request.header("Authorization", "Bearer " + props.getAuthToken());
         }
 
-        // Read the body as raw bytes regardless of Content-Type — some upstream
-        // servers return application/octet-stream for what is actually text/json,
-        // which the default String converter rejects. Decoding bytes ourselves
-        // sidesteps the converter mismatch.
-        byte[] rawBytes = request.body(payload).retrieve().body(byte[].class);
-        if (rawBytes == null || rawBytes.length == 0) return "";
-        return new String(rawBytes, java.nio.charset.StandardCharsets.UTF_8);
+        // Drop to .exchange() so we read the raw response stream ourselves
+        // and bypass HttpMessageConverters entirely. Some upstream servers
+        // return application/octet-stream for what's actually text/JSON,
+        // which neither the String nor byte[] converters will accept.
+        // Reading the stream directly sidesteps the mismatch.
+        return request.body(payload).exchange((req, resp) -> {
+            int status = resp.getStatusCode().value();
+            byte[] bytes;
+            try (var in = resp.getBody()) {
+                bytes = in.readAllBytes();
+            }
+            String body = bytes == null || bytes.length == 0
+                    ? ""
+                    : new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+
+            if (status >= 400) {
+                // Throw something the caller will catch + log + write to notify_error.
+                throw new org.springframework.web.client.RestClientException(
+                        "Upstream " + status + ": " + body);
+            }
+            return body;
+        });
     }
 
     /** Sends the approval-request notification, then writes notify_status back. */

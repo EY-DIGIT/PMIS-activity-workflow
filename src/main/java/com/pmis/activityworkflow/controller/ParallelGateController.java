@@ -14,6 +14,7 @@ import com.pmis.activityworkflow.web.request.CastVoteRequest;
 import com.pmis.activityworkflow.web.request.RequestDivisionApprovalRequest;
 import com.pmis.activityworkflow.web.request.RequestOwnerApprovalRequest;
 import com.pmis.activityworkflow.web.request.SeedParticipantsRequest;
+import com.pmis.activityworkflow.web.response.GateStatusResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
@@ -105,6 +106,24 @@ public class ParallelGateController {
         return ResponseEntity.ok(divisionUserRepository
                 .findByBusinessServiceAndActivityIdAndStateNameAndDivisionCode(
                         businessService, activityId, stateName, divisionCode));
+    }
+
+    /**
+     * Gate-status snapshot — the UI calls this to decide whether to
+     * enable the "Request Owner Approval" button.
+     *
+     * <p>{@code stateName} is optional; defaults to the only parallel
+     * state in the workflow ({@code PENDINGATCONCERNEDDIVISION}).</p>
+     */
+    @GetMapping("/gate-status/{businessService}/{activityId}")
+    @Operation(summary = "Aggregate gate status with readyForOwner flag")
+    public ResponseEntity<GateStatusResponse> gateStatus(
+            @PathVariable String businessService,
+            @PathVariable String activityId,
+            @RequestParam(required = false) String stateName) {
+
+        return ResponseEntity.ok(
+                gateService.gateStatus(businessService, activityId, stateName));
     }
 
     /* ==========================================================

@@ -53,4 +53,12 @@ public interface ProcessInstanceRepository
     default Optional<ProcessInstanceEntity> findLatestSubmit(String businessService, String activityId) {
         return findLatestSubmits(businessService, activityId).stream().findFirst();
     }
+
+    /**
+     * Latest transition row for this activity (any action). Lets callers
+     * read the activity's current state cheaply for status reconciliation.
+     */
+    Optional<ProcessInstanceEntity>
+        findFirstByBusinessServiceAndActivityIdOrderByAuditDetails_CreatedTimeDesc(
+                String businessService, String activityId);
 }

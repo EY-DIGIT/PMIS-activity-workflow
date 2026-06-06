@@ -71,10 +71,86 @@ public class StatusUpdateService {
         List<ProcessInstanceEntity> saved = processRepository.saveAll(rows);
         log.info("Persisted {} ProcessInstance transition(s) via JPA", saved.size());
 
-        // Fire outcome notifications AFTER persist — best-effort.
+        // After persist: sync the owner's parallel-participant row so the
+        // inbox reflects the action correctly, then fire notifications.
         for (int i = 0; i < saved.size(); i++) {
+            syncOwnerParticipantRow(saved.get(i), tuples.get(i), requestInfo);
             dispatchOutcomeNotification(saved.get(i), tuples.get(i), requestInfo);
         }
+    }
+
+    /**
+     * Keep the OWNER row in {@code aw_parallel_participant} in sync with the
+     * transition the owner just fired through {@code /process/_transition}.
+     *
+     * <p>Why this exists: division approvers vote through
+     * {@code /parallel/vote} which writes their row directly. Owners act
+     * through {@code /process/_transition}, which only writes
+     * {@code aw_process_instance}. Without this sync, the owner's
+     * participant row sits at {@code PENDING} forever and the inbox keeps
+     * showing the activity as "Pending" for the owner even after they've
+     * approved.</p>
+     *
+     * <p>We update only the OWNER row (matched by state + division code +
+     * approver uuid) and only when the action is a final owner decision —
+     * APPROVE, RETURN_TO_VENDOR, or RETURN_TO_DIVISION. Other transitions
+     * (SUBMIT, ALL_APPROVED, ANY_REJECTED) don't touch participant rows.</p>
+     */
+    private void syncOwnerParticipantRow(ProcessInstanceEntity saved,
+                                         ProcessStateAndAction tuple,
+                                         RequestInfo requestInfo) {
+
+        String action = saved.getActionName();
+        if (action == null) return;
+
+        String mapped = switch (action.toUpperCase()) {
+            case "APPROVE"                                            -> "APPROVED";
+            case "REJECT", "RETURN_TO_VENDOR", "RETURNTOVENDOR"       -> "REJECTED";
+            case "RETURN_TO_DIVISION",
+                 "OWNER_RETURN_TO_DIVISIONS",
+                 "RETURNTOCONCERNEDDIVISION"                          -> "RETURNED";
+            default                                                   -> null;
+        };
+        if (mapped == null) return;
+
+        // The owner's row was seeded under state PENDINGATOWNERDIVISION with
+        // divisionCode 'OWNER'. We need that row, regardless of where the
+        // activity has moved to *after* this transition.
+        List<ParallelParticipantEntity> ownerRows = participantRepository
+                .findByBusinessServiceAndActivityIdAndStateName(
+                        saved.getBusinessService(),
+                        saved.getActivityId(),
+                        "PENDINGATOWNERDIVISION");
+
+        if (ownerRows.isEmpty()) {
+            log.debug("No OWNER participant row to sync for activity {} - skipping",
+                    saved.getActivityId());
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        String actorUuid = Optional.ofNullable(requestInfo)
+                .map(RequestInfo::getUserInfo)
+                .map(UserInfo::getUuid)
+                .orElse(null);
+
+        for (ParallelParticipantEntity p : ownerRows) {
+            // Defensive: only touch the OWNER division row (auto-seeded as 'OWNER').
+            if (!"OWNER".equalsIgnoreCase(p.getDivisionCode())) continue;
+
+            p.setVoteStatus(mapped);
+            p.setVoteComment(saved.getComment());
+            p.setVotedAt(now);
+            p.setUpdatedAt(now);
+            // capture WHO acted, in case the seeded approver_user_uuid was a
+            // stale snapshot or different from the user actually clicking.
+            if (actorUuid != null) {
+                p.setApproverUserUuid(actorUuid);
+            }
+        }
+        participantRepository.saveAll(ownerRows);
+        log.info("Synced OWNER participant row to '{}' for activity {} (action={})",
+                mapped, saved.getActivityId(), action);
     }
 
     /* ====================  outcome notification routing  ==================== */

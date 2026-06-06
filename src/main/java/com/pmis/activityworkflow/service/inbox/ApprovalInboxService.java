@@ -65,6 +65,17 @@ public class ApprovalInboxService {
     private ApprovalInboxItem buildRow(ParallelParticipantEntity p,
                                        Map<String, JsonNode> projectCache) {
 
+        // Pull the latest workflow state once - we'll use it for two things:
+        //   (1) the SUBMIT timestamp (used later)
+        //   (2) reconciling 'voteStatus' so a stale PENDING row doesn't
+        //       show in the inbox after the activity has moved on
+        Optional<ProcessInstanceEntity> latestState = processRepository
+                .findFirstByBusinessServiceAndActivityIdOrderByAuditDetails_CreatedTimeDesc(
+                        p.getBusinessService(), p.getActivityId());
+        String currentState = latestState
+                .map(ProcessInstanceEntity::getCurrentState)
+                .orElse(null);
+
         ApprovalInboxItem.ApprovalInboxItemBuilder b = ApprovalInboxItem.builder()
                 .participantUuid(p.getUuid())
                 .businessService(p.getBusinessService())
@@ -76,7 +87,7 @@ public class ApprovalInboxService {
                 .approverUserUuid(p.getApproverUserUuid())
                 .approverName(p.getApproverName())
                 .approverEmail(p.getApproverEmail())
-                .voteStatus(p.getVoteStatus())
+                .voteStatus(effectiveVoteStatus(p, currentState))
                 .votedAt(p.getVotedAt());
 
         // --- 1. activity details (always fetch, response field set is small) ---
@@ -117,6 +128,37 @@ public class ApprovalInboxService {
               .ifPresent(b::submittedAt);
 
         return b.build();
+    }
+
+    /**
+     * Reconcile the participant row's raw vote_status against the activity's
+     * current workflow state. Without this, a row that was never updated
+     * (e.g. owner row left at PENDING because the owner acted via
+     * /process/_transition) keeps showing PENDING in the inbox forever.
+     *
+     * <p>Rules:</p>
+     * <ul>
+     *   <li>If the activity reached the terminal state
+     *       ({@code ACTIVITYCOMPLETED}) AND this row is still PENDING,
+     *       surface it as APPROVED — the only path to completion is
+     *       through every gate approving.</li>
+     *   <li>If the activity has moved BEFORE this row's stateName AND
+     *       this row is still PENDING, surface as PENDING (correct — not
+     *       reached yet).</li>
+     *   <li>Otherwise, return whatever the row says.</li>
+     * </ul>
+     */
+    private String effectiveVoteStatus(ParallelParticipantEntity p, String currentState) {
+        String raw = p.getVoteStatus();
+        if (!"PENDING".equalsIgnoreCase(raw)) return raw;       // APPROVED / REJECTED — trust the row
+        if (!StringUtils.hasText(currentState)) return raw;
+
+        // Activity terminated — must have approved at every gate to get here.
+        if ("ACTIVITYCOMPLETED".equalsIgnoreCase(currentState)) {
+            return "APPROVED";
+        }
+
+        return raw;
     }
 
     /** Match vendorId against project.vendors[].id. */

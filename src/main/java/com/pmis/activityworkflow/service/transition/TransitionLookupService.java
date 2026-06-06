@@ -55,7 +55,6 @@ public class TransitionLookupService {
         ActivityEntity workflow = getWorkflow(processInstances);
         Map<String, ProcessInstanceEntity> latestByActivityId =
                 fetchLatestByActivityId(processInstances, workflow.getActivityName());
-        List<String> allowedRoles = rolesAllowedInService(workflow);
 
         for (ProcessInstanceDTO dto : processInstances) {
             ProcessStateAndAction tuple = ProcessStateAndAction.builder()
@@ -107,9 +106,12 @@ public class TransitionLookupService {
                     if (action.getActionName() != null
                             && action.getActionName().equalsIgnoreCase(dto.getAction())) {
 
-                        if (action.getRoles() != null && action.getRoles().contains("*")) {
-                            action.setRoles(allowedRoles);  // expand "*"
-                        }
+                        // Note: the "*" wildcard in action.roles is no longer
+                        // expanded here. TransitionValidator treats "*" as
+                        // "any authenticated user" directly, which means
+                        // admin/owner roles don't need to be hardcoded into
+                        // a wildcard expansion list. The action's role list
+                        // is left as-is.
                         tuple.setAction(action);
                         break;
                     }
@@ -182,16 +184,5 @@ public class TransitionLookupService {
                 .orElseThrow(() -> new InvalidTransitionException(
                         "nextState '" + nextStateRef + "' not found in workflow '"
                                 + workflow.getActivityName() + "'"));
-    }
-
-    /** All distinct role codes used anywhere in this workflow — used to expand "*". */
-    private List<String> rolesAllowedInService(ActivityEntity workflow) {
-        return workflow.getStates().stream()
-                .flatMap(s -> s.getActions().stream())
-                .filter(a -> a.getRoles() != null)
-                .flatMap(a -> a.getRoles().stream())
-                .filter(r -> !"*".equals(r))
-                .distinct()
-                .toList();
     }
 }

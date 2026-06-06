@@ -27,6 +27,9 @@ public class TransitionValidator {
     /** true = reject when roles don't match; false = warn but proceed. */
     private static final boolean ENFORCE_ROLES = true;
 
+    /** Action role that means "any authenticated user with any role". */
+    private static final String WILDCARD_ROLE = "*";
+
     public void validateRequest(RequestInfo requestInfo,
                                 List<ProcessStateAndAction> tuples) {
 
@@ -35,6 +38,19 @@ public class TransitionValidator {
         for (ProcessStateAndAction tuple : tuples) {
             List<String> required = tuple.getAction().getRoles();
             if (required == null || required.isEmpty()) continue;
+
+            // Wildcard support — if the workflow declares "*" in the
+            // required-roles list for this action, any non-anonymous caller
+            // passes. This is how system-fired actions (e.g. ALL_APPROVED
+            // triggered by an admin's "Request Owner Approval" click) get
+            // past the role check even when the admin doesn't carry the
+            // division_approver role.
+            if (required.contains(WILDCARD_ROLE)) {
+                if (!callerRoles.isEmpty()) continue;
+                // No roles at all — even wildcard requires the caller to be
+                // identified. Fall through to the failure path so this is
+                // still surfaced.
+            }
 
             boolean allowed = callerRoles.stream().anyMatch(required::contains);
             if (allowed) continue;

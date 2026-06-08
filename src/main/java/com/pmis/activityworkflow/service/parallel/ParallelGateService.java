@@ -533,10 +533,29 @@ public class ParallelGateService {
 
         if (anyRejected) {
             // Reject is a hard stop — auto-fire it so the record goes back
-            // to READYFORAPPROVAL without any manual step.
+            // to READYFORAPPROVAL without any manual step. The synthetic
+            // comment includes the rejecter's division + reason so the
+            // audit row tells the full story without cross-referencing
+            // the corresponding VOTE_REJECTED row.
+            ParallelParticipantEntity firstReject = all.stream()
+                    .filter(p -> VOTE_REJECTED.equals(p.getVoteStatus()))
+                    .findFirst()
+                    .orElse(null);
+
+            String autoComment = "Auto-fired by parallel gate: ANY_REJECTED";
+            if (firstReject != null) {
+                String div = firstReject.getDivisionCode();
+                String who = firstReject.getApproverName() != null
+                        ? firstReject.getApproverName() : firstReject.getApproverUserUuid();
+                String reason = firstReject.getVoteComment();
+                autoComment = "Rejected by " + (div == null ? "?" : div)
+                        + " (" + who + ")"
+                        + (reason == null || reason.isBlank() ? "" : ": " + reason);
+            }
+
             log.info("Gate REJECT: {}/{}/{} - at least one participant rejected",
                     req.getBusinessService(), req.getActivityId(), req.getStateName());
-            fireSystemAction(req, ACTION_ANY_REJECTED, "Auto-fired by parallel gate: ANY_REJECTED");
+            fireSystemAction(req, ACTION_ANY_REJECTED, autoComment);
             return;
         }
 

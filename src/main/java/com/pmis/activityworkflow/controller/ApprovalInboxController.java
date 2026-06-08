@@ -1,9 +1,11 @@
 package com.pmis.activityworkflow.controller;
 
+import com.pmis.activityworkflow.service.inbox.ActivityTimelineService;
 import com.pmis.activityworkflow.service.inbox.ApprovalDetailService;
 import com.pmis.activityworkflow.service.inbox.ApprovalInboxService;
 import com.pmis.activityworkflow.web.response.ApprovalDetailResponse;
 import com.pmis.activityworkflow.web.response.ApprovalInboxItem;
+import com.pmis.activityworkflow.web.response.TimelineEvent;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -29,6 +31,7 @@ public class ApprovalInboxController {
 
     private final ApprovalInboxService inboxService;
     private final ApprovalDetailService detailService;
+    private final ActivityTimelineService timelineService;
 
     /**
      * List view — returns one row per approval the user is involved in.
@@ -66,5 +69,20 @@ public class ApprovalInboxController {
             @RequestParam @NotBlank String userUuid) {
 
         return ResponseEntity.ok(detailService.forActivity(activityId, userUuid));
+    }
+
+    /**
+     * Timeline feed — chronological list of significant actions on the
+     * activity: state transitions, votes, owner actions. Newest first.
+     */
+    @GetMapping("/{activityId}/timeline")
+    @Operation(summary = "Activity timeline - transitions + votes + owner actions, newest first")
+    public ResponseEntity<List<TimelineEvent>> timeline(
+            @PathVariable @NotBlank String activityId,
+
+            @Parameter(description = "Optional - businessService scope; usually omitted")
+            @RequestParam(required = false) String businessService) {
+
+        return ResponseEntity.ok(timelineService.timeline(businessService, activityId));
     }
 }

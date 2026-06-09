@@ -46,36 +46,72 @@ public class ApprovalInboxService {
     public List<ApprovalInboxItem> inbox(String userUuid, String stateName, String voteStatus) {
 
         List<ParallelParticipantEntity> rows = participantRepository
-                .findInboxForApprover(userUuid, stateName, normalize(voteStatus));
+                .findInboxForApprover(userUuid, normalize(stateName), normalize(voteStatus));
 
         if (rows.isEmpty()) return List.of();
 
+        // Resolve each activity's current workflow state once. Used to
+        // (a) hide rows whose stage the activity hasn't reached yet and
+        // (b) reconcile voteStatus inside buildRow without a duplicate lookup.
+        Map<String, String> currentStateByActivity = new HashMap<>();
+        for (ParallelParticipantEntity p : rows) {
+            currentStateByActivity.computeIfAbsent(p.getActivityId(), aid ->
+                    processRepository
+                            .findFirstByBusinessServiceAndActivityIdOrderByAuditDetails_CreatedTimeDesc(
+                                    p.getBusinessService(), aid)
+                            .map(ProcessInstanceEntity::getCurrentState)
+                            .orElse(null));
+        }
+
+        // Hide rows whose state the activity hasn't reached. Example: the
+        // OWNER row is auto-seeded at activity submission time so without
+        // this filter it would appear in the owner's inbox even while the
+        // divisions are still voting at the gate.
+        List<ParallelParticipantEntity> visible = rows.stream()
+                .filter(p -> isAtOrPastRowState(
+                        currentStateByActivity.get(p.getActivityId()),
+                        p.getStateName()))
+                .toList();
+        if (visible.isEmpty()) return List.of();
+
         // Cache project JSON within this call — many activities share a project.
         Map<String, JsonNode> projectCache = new HashMap<>();
-        List<ApprovalInboxItem> out = new ArrayList<>(rows.size());
+        List<ApprovalInboxItem> out = new ArrayList<>(visible.size());
 
-        for (ParallelParticipantEntity p : rows) {
-            out.add(buildRow(p, projectCache));
+        for (ParallelParticipantEntity p : visible) {
+            out.add(buildRow(p, projectCache, currentStateByActivity.get(p.getActivityId())));
         }
         return out;
     }
 
     /* ============================================================ */
 
+    /** Workflow state order, lowest (start) to highest (terminal). */
+    private static final List<String> STATE_ORDER = List.of(
+            "READYFORAPPROVAL",
+            "PENDINGATCONCERNEDDIVISION",
+            "PENDINGATOWNERDIVISION",
+            "ACTIVITYCOMPLETED");
+
+    /**
+     * True if {@code currentState} is at or past {@code rowState} in the
+     * workflow. Used to hide pre-stage rows from the inbox.
+     *
+     * <p>Permissive on unknowns: if either state is null or not in the
+     * known order, we err on showing the row rather than silently
+     * dropping it.</p>
+     */
+    private boolean isAtOrPastRowState(String currentState, String rowState) {
+        if (currentState == null || rowState == null) return true;
+        int currentIdx = STATE_ORDER.indexOf(currentState);
+        int rowIdx     = STATE_ORDER.indexOf(rowState);
+        if (currentIdx == -1 || rowIdx == -1) return true;
+        return currentIdx >= rowIdx;
+    }
+
     private ApprovalInboxItem buildRow(ParallelParticipantEntity p,
-                                       Map<String, JsonNode> projectCache) {
-
-        // Pull the latest workflow state once - we'll use it for two things:
-        //   (1) the SUBMIT timestamp (used later)
-        //   (2) reconciling 'voteStatus' so a stale PENDING row doesn't
-        //       show in the inbox after the activity has moved on
-        Optional<ProcessInstanceEntity> latestState = processRepository
-                .findFirstByBusinessServiceAndActivityIdOrderByAuditDetails_CreatedTimeDesc(
-                        p.getBusinessService(), p.getActivityId());
-        String currentState = latestState
-                .map(ProcessInstanceEntity::getCurrentState)
-                .orElse(null);
-
+                                       Map<String, JsonNode> projectCache,
+                                       String currentState) {
         ApprovalInboxItem.ApprovalInboxItemBuilder b = ApprovalInboxItem.builder()
                 .participantUuid(p.getUuid())
                 .businessService(p.getBusinessService())

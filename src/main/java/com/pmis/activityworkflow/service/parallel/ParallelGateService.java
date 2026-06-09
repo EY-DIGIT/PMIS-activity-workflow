@@ -669,7 +669,44 @@ public class ParallelGateService {
                         .map(RequestInfo::getUserInfo).map(UserInfo::getUuid).orElse("?"),
                 businessService, activityId);
 
+        // If the owner acted on this activity in a previous round (e.g.
+        // RETURN_TO_VENDOR with vote_status=REJECTED) and the activity has
+        // come back around for re-review, clear that stale vote so the
+        // owner inbox shows PENDING again. Symmetric to the gate-row reset
+        // we do on RETURN_TO_DIVISION and on re-submit after owner reject.
+        resetOwnerRowToPending(businessService, activityId);
+
         fireSystemAction(synthetic, ACTION_ALL_APPROVED, adminComment);
+    }
+
+    /**
+     * Flip the OWNER participant row (state_name=PENDINGATOWNERDIVISION,
+     * division_code=OWNER) back to PENDING and clear the per-vote fields.
+     * Idempotent — if the row is already PENDING (e.g. first time through
+     * this activity) nothing changes.
+     */
+    private void resetOwnerRowToPending(String businessService, String activityId) {
+        List<ParallelParticipantEntity> ownerRows = participantRepository
+                .findByBusinessServiceAndActivityIdAndStateName(
+                        businessService, activityId, "PENDINGATOWNERDIVISION");
+        if (ownerRows.isEmpty()) return;
+
+        long now = System.currentTimeMillis();
+        boolean changed = false;
+        for (ParallelParticipantEntity p : ownerRows) {
+            if (!"OWNER".equalsIgnoreCase(p.getDivisionCode())) continue;
+            if (VOTE_PENDING.equals(p.getVoteStatus())) continue;
+            p.setVoteStatus(VOTE_PENDING);
+            p.setVoteComment(null);
+            p.setVotedAt(null);
+            p.setUpdatedAt(now);
+            changed = true;
+        }
+        if (changed) {
+            participantRepository.saveAll(ownerRows);
+            log.info("Reset OWNER participant row to PENDING for activity {} "
+                    + "(re-requesting owner approval after a prior decision)", activityId);
+        }
     }
 
     /**

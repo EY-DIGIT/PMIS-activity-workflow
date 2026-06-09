@@ -50,11 +50,21 @@ public class AssignmentData {
         private String id;
         private String login;
         private String email;
+        /** Upstream-provided full name. Some older endpoints returned
+         *  firstName+lastName instead — both shapes are supported. */
+        private String fullName;
         private String firstName;
         private String lastName;
 
-        /** Convenience — "First Last" with safe trimming. */
-        public String fullName() {
+        /**
+         * Best display name we can produce for this user, with fallback:
+         * upstream {@code fullName} first, then "{firstName} {lastName}",
+         * finally {@code login}. Returns a trimmed non-empty string or null.
+         */
+        public String displayName() {
+            if (fullName != null && !fullName.trim().isEmpty()) {
+                return fullName.trim();
+            }
             String f = firstName == null ? "" : firstName.trim();
             String l = lastName  == null ? "" : lastName.trim();
             String name = (f + " " + l).trim();

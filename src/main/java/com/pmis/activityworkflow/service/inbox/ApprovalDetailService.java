@@ -5,7 +5,9 @@ import com.pmis.activityworkflow.entity.ProcessInstanceEntity;
 import com.pmis.activityworkflow.exception.InvalidTransitionException;
 import com.pmis.activityworkflow.repository.ParallelParticipantRepository;
 import com.pmis.activityworkflow.repository.ProcessInstanceRepository;
+import com.pmis.activityworkflow.service.assignments.ActivityAssignmentsClient;
 import com.pmis.activityworkflow.service.assignments.ActivityDetailsClient;
+import com.pmis.activityworkflow.service.assignments.AssignmentData;
 import com.pmis.activityworkflow.web.response.ApprovalDetailResponse;
 import com.pmis.activityworkflow.web.response.ApprovalDetailResponse.Attachment;
 import com.pmis.activityworkflow.web.response.ApprovalDetailResponse.CommentAuthor;
@@ -42,6 +44,7 @@ public class ApprovalDetailService {
     private final ParallelParticipantRepository participantRepository;
     private final ProcessInstanceRepository processRepository;
     private final ActivityDetailsClient activityDetailsClient;
+    private final ActivityAssignmentsClient assignmentsClient;
 
     public ApprovalDetailResponse forActivity(String activityId, String userUuid) {
 
@@ -60,15 +63,39 @@ public class ApprovalDetailService {
         // pluck it off the first row for the SUBMIT lookup below.
         String businessService = participants.get(0).getBusinessService();
 
-        // current state = the state name on the newest participant rows
-        String currentState = participants.get(0).getStateName();
-        // narrow to rows on that state (older rows may exist from earlier seeds)
+        // The "your status" breakdown is ALWAYS about the concerned-division
+        // gate — that's where the parallel voting happens. The OWNER row
+        // (state_name=PENDINGATOWNERDIVISION, division_code=OWNER) is the
+        // post-gate single-approver step and lives outside this breakdown.
+        //
+        // Previously we picked "whatever state is on the first row in the
+        // list", which silently dropped legitimate division rows whenever
+        // an OWNER row came back first in the result set.
         List<ParallelParticipantEntity> currentRows = participants.stream()
-                .filter(p -> currentState.equals(p.getStateName()))
+                .filter(p -> "PENDINGATCONCERNEDDIVISION".equalsIgnoreCase(p.getStateName()))
                 .toList();
 
-        ParallelParticipantEntity yourRow = currentRows.stream()
+        // Fallback: if there's no division-gate row at all (e.g. the activity
+        // was created before parallel-gate seeding shipped), preserve the
+        // old behavior so the UI doesn't go blank.
+        if (currentRows.isEmpty()) {
+            String fallbackState = participants.get(0).getStateName();
+            currentRows = participants.stream()
+                    .filter(p -> fallbackState.equalsIgnoreCase(p.getStateName()))
+                    .toList();
+        }
+
+        String currentState = currentRows.isEmpty()
+                ? participants.get(0).getStateName()
+                : currentRows.get(0).getStateName();
+
+        // yourRow: the participant row that matches the logged-in user.
+        // Look across BOTH the division gate AND the owner row, so the owner
+        // viewing the detail screen also gets their own 'yourStatus' populated.
+        ParallelParticipantEntity yourRow = participants.stream()
                 .filter(p -> userUuid.equals(p.getApproverUserUuid()))
+                .filter(p -> "PENDINGATCONCERNEDDIVISION".equalsIgnoreCase(p.getStateName())
+                          || "OWNER".equalsIgnoreCase(p.getDivisionCode()))
                 .findFirst()
                 .orElse(null);
 
@@ -92,7 +119,16 @@ public class ApprovalDetailService {
         List<OrganizationSubmission> submissions = fetchSubmissions(activityId);
 
         // ---- 5. per-division status rows ----
-        List<DivisionStatus> breakdown = new ArrayList<>(currentRows.size());
+        // Always show every approver that was seeded for this activity in the
+        // breakdown — divisions first (in seed order), then the OWNER row at
+        // the end. The OWNER row is anchored to PENDINGATOWNERDIVISION so it
+        // wasn't picked up by 'currentRows' (which is concerned-division only)
+        // and would otherwise be silently dropped from the response.
+        List<ParallelParticipantEntity> ownerRows = participants.stream()
+                .filter(p -> "OWNER".equalsIgnoreCase(p.getDivisionCode()))
+                .toList();
+
+        List<DivisionStatus> breakdown = new ArrayList<>(currentRows.size() + 1);
         for (ParallelParticipantEntity p : currentRows) {
             breakdown.add(DivisionStatus.builder()
                     .divisionCode(p.getDivisionCode())
@@ -103,6 +139,27 @@ public class ApprovalDetailService {
                     .votedAt(p.getVotedAt())
                     .isYou(userUuid.equals(p.getApproverUserUuid()))
                     .build());
+        }
+
+        // Append the OWNER row. If the activity has a real DB row (modern
+        // seeding), use it. Otherwise (legacy activity, pre-owner-seed) fall
+        // back to the upstream assignments API so the response always shows
+        // an owner entry alongside the division approvers.
+        if (!ownerRows.isEmpty()) {
+            for (ParallelParticipantEntity p : ownerRows) {
+                breakdown.add(DivisionStatus.builder()
+                        .divisionCode(p.getDivisionCode())
+                        .divisionName(p.getDivisionName())
+                        .approverUserUuid(p.getApproverUserUuid())
+                        .approverName(p.getApproverName())
+                        .voteStatus(p.getVoteStatus())
+                        .votedAt(p.getVotedAt())
+                        .isYou(userUuid.equals(p.getApproverUserUuid()))
+                        .build());
+            }
+        } else {
+            DivisionStatus synthesized = synthesizeOwnerFromUpstream(activityId, userUuid);
+            if (synthesized != null) breakdown.add(synthesized);
         }
 
         // ---- 6. assemble ----
@@ -217,5 +274,39 @@ public class ApprovalDetailService {
         if (v.isMissingNode() || v.isNull()) return null;
         String t = v.asText();
         return StringUtils.hasText(t) ? t : null;
+    }
+
+    /**
+     * Build an OWNER entry for the breakdown from the upstream assignments
+     * API. Used when no OWNER participant row exists for the activity
+     * (legacy activities created before owner-row auto-seeding shipped).
+     * Returns {@code null} if upstream gives us nothing usable.
+     *
+     * <p>voteStatus is set to PENDING because we have no DB record of an
+     * owner action. If the owner has in fact approved, that's surfaced via
+     * the activity's current state (ACTIVITYCOMPLETED) — not from this
+     * synthesized row.</p>
+     */
+    private DivisionStatus synthesizeOwnerFromUpstream(String activityId, String userUuid) {
+        try {
+            AssignmentData data = assignmentsClient.fetch(activityId);
+            if (data == null || data.getOwnerApprover() == null
+                    || data.getOwnerApprover().isEmpty()) {
+                return null;
+            }
+            AssignmentData.UserRef owner = data.getOwnerApprover().get(0);
+            return DivisionStatus.builder()
+                    .divisionCode("OWNER")
+                    .divisionName("OWNER")
+                    .approverUserUuid(owner.getId())
+                    .approverName(owner.displayName())
+                    .voteStatus("PENDING")
+                    .isYou(userUuid.equals(owner.getId()))
+                    .build();
+        } catch (Exception ex) {
+            log.warn("Failed to synthesize OWNER row from assignments for activity {}: {}",
+                    activityId, ex.getMessage());
+            return null;
+        }
     }
 }

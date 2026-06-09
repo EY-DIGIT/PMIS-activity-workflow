@@ -393,7 +393,7 @@ public class StatusUpdateService {
                 return new Recipient(
                         target.getId(),
                         target.getEmail(),
-                        target.fullName());
+                        target.displayName());
             }
         } catch (Exception ex) {
             log.warn("Assignments lookup for {} on activity {} failed: {} - falling back",

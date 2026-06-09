@@ -44,11 +44,12 @@ public class ApprovalInboxController {
     public ResponseEntity<List<ApprovalInboxItem>> inbox(
             @Parameter(description = "Approver user uuid (logged-in user)", required = true)
             @RequestParam @NotBlank String userUuid,
+            @RequestParam @NotBlank String stateName,
 
             @Parameter(description = "Optional filter: PENDING / APPROVED / REJECTED")
             @RequestParam(required = false) String voteStatus) {
 
-        return ResponseEntity.ok(inboxService.inbox(userUuid, voteStatus));
+        return ResponseEntity.ok(inboxService.inbox(userUuid, stateName, voteStatus));
     }
 
     /**

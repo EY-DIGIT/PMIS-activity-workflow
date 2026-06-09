@@ -43,10 +43,10 @@ public class ApprovalInboxService {
     private final ProcessInstanceRepository processRepository;
     private final ActivityDetailsClient activityDetailsClient;
 
-    public List<ApprovalInboxItem> inbox(String userUuid, String voteStatus) {
+    public List<ApprovalInboxItem> inbox(String userUuid, String stateName, String voteStatus) {
 
         List<ParallelParticipantEntity> rows = participantRepository
-                .findInboxForApprover(userUuid, normalize(voteStatus));
+                .findInboxForApprover(userUuid, stateName, normalize(voteStatus));
 
         if (rows.isEmpty()) return List.of();
 

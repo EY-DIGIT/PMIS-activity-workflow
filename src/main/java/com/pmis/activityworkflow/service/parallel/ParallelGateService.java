@@ -259,7 +259,7 @@ public class ParallelGateService {
                 users.add(DivisionUserInput.builder()
                         .userUuid(u.getId())
                         .userEmail(u.getEmail())
-                        .userName(u.fullName())
+                        .userName(u.displayName())
                         .build());
             }
 
@@ -269,7 +269,7 @@ public class ParallelGateService {
                     .approver(ParticipantInput.builder()
                             .approverUserUuid(approver.getId())
                             .approverEmail(approver.getEmail())
-                            .approverName(approver.fullName())
+                            .approverName(approver.displayName())
                             .build())
                     .users(users)
                     .build());
@@ -369,7 +369,7 @@ public class ParallelGateService {
                     .divisionName(OWNER_DIVISION_CODE)
                     .approverUserUuid(owner.getId())
                     .approverEmail(owner.getEmail())
-                    .approverName(owner.fullName())
+                    .approverName(owner.displayName())
                     .voteStatus(VOTE_PENDING)
                     .notifyStatus("PENDING")
                     .createdAt(now)
@@ -388,7 +388,7 @@ public class ParallelGateService {
                     .divisionCode(OWNER_DIVISION_CODE)
                     .userUuid(owner.getId())
                     .userEmail(owner.getEmail())
-                    .userName(owner.fullName())
+                    .userName(owner.displayName())
                     .createdAt(now)
                     .updatedAt(now)
                     .build();

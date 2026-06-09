@@ -39,15 +39,33 @@ public interface ParallelParticipantRepository
     /**
      * All participant rows where the given user is an approver, optionally
      * filtered to one vote status (e.g. only "PENDING"). Newest first.
+     *
+     * <p>Scoped to {@code state_name = 'PENDINGATCONCERNEDDIVISION'} — the
+     * inbox is the gate-stage list. OWNER rows (state =
+     * PENDINGATOWNERDIVISION, division_code = 'OWNER') are intentionally
+     * excluded so a user who happens to be BOTH a division approver and
+     * an owner approver doesn't see the same activity twice.</p>
+     */
+    /**
+     * All participant rows where the given user is an approver, optionally
+     * filtered by vote status and/or state. Newest first.
+     *
+     * <p>Pass {@code stateName=null} to return rows from every state
+     * (gate + owner). Typical usage from the inbox controller is to pass
+     * {@code "PENDINGATCONCERNEDDIVISION"} so a user who is both a
+     * division approver and an owner approver doesn't see the same
+     * activity twice.</p>
      */
     @Query("""
            SELECT p FROM ParallelParticipantEntity p
             WHERE p.approverUserUuid = :userUuid
+              AND (:stateName  IS NULL OR p.stateName  = :stateName)
               AND (:voteStatus IS NULL OR p.voteStatus = :voteStatus)
             ORDER BY p.createdAt DESC
            """)
     List<ParallelParticipantEntity> findInboxForApprover(
             @Param("userUuid")   String userUuid,
+            @Param("stateName")  String stateName,
             @Param("voteStatus") String voteStatus);
 
     /**

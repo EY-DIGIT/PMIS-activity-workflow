@@ -44,7 +44,10 @@ public class ApprovalInboxController {
     public ResponseEntity<List<ApprovalInboxItem>> inbox(
             @Parameter(description = "Approver user uuid (logged-in user)", required = true)
             @RequestParam @NotBlank String userUuid,
-            @RequestParam @NotBlank String stateName,
+
+            @Parameter(description = "Optional filter: PENDINGATCONCERNEDDIVISION / PENDINGATOWNERDIVISION. " +
+                                     "Omit to return rows from every state.")
+            @RequestParam(required = false) String stateName,
 
             @Parameter(description = "Optional filter: PENDING / APPROVED / REJECTED")
             @RequestParam(required = false) String voteStatus) {
@@ -67,9 +70,15 @@ public class ApprovalInboxController {
 
             @Parameter(description = "Logged-in user uuid - determines 'your status' fields",
                        required = true)
-            @RequestParam @NotBlank String userUuid) {
+            @RequestParam @NotBlank String userUuid,
 
-        return ResponseEntity.ok(detailService.forActivity(activityId, userUuid));
+            @Parameter(description = "Optional context: PENDINGATCONCERNEDDIVISION when on the " +
+                                     "division approver screen, PENDINGATOWNERDIVISION when on " +
+                                     "the owner approval screen. Disambiguates when one user holds " +
+                                     "both roles. Omit to fall back to a sensible default.")
+            @RequestParam(required = false) String stateName) {
+
+        return ResponseEntity.ok(detailService.forActivity(activityId, userUuid, stateName));
     }
 
     /**

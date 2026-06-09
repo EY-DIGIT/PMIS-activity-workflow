@@ -46,7 +46,7 @@ public class ApprovalDetailService {
     private final ActivityDetailsClient activityDetailsClient;
     private final ActivityAssignmentsClient assignmentsClient;
 
-    public ApprovalDetailResponse forActivity(String activityId, String userUuid) {
+    public ApprovalDetailResponse forActivity(String activityId, String userUuid, String stateName) {
 
         // ---- 1. participants for this activity, at any parallel state ----
         // We pull the most recent state with participants - the one the
@@ -63,14 +63,19 @@ public class ApprovalDetailService {
         // pluck it off the first row for the SUBMIT lookup below.
         String businessService = participants.get(0).getBusinessService();
 
+        // Authoritative current state of the activity comes from the workflow
+        // table (aw_process_instance), NOT from any participant row. Participant
+        // rows are anchored to the state they were seeded for and don't move.
+        String currentActivityState = processRepository
+                .findFirstByBusinessServiceAndActivityIdOrderByAuditDetails_CreatedTimeDesc(
+                        businessService, activityId)
+                .map(ProcessInstanceEntity::getCurrentState)
+                .orElse(null);
+
         // The "your status" breakdown is ALWAYS about the concerned-division
         // gate — that's where the parallel voting happens. The OWNER row
         // (state_name=PENDINGATOWNERDIVISION, division_code=OWNER) is the
         // post-gate single-approver step and lives outside this breakdown.
-        //
-        // Previously we picked "whatever state is on the first row in the
-        // list", which silently dropped legitimate division rows whenever
-        // an OWNER row came back first in the result set.
         List<ParallelParticipantEntity> currentRows = participants.stream()
                 .filter(p -> "PENDINGATCONCERNEDDIVISION".equalsIgnoreCase(p.getStateName()))
                 .toList();
@@ -85,19 +90,22 @@ public class ApprovalDetailService {
                     .toList();
         }
 
-        String currentState = currentRows.isEmpty()
-                ? participants.get(0).getStateName()
-                : currentRows.get(0).getStateName();
+        // Header field — prefer the workflow's real current state; fall back
+        // to the gate-row state for legacy activities with no process-instance row.
+        String currentState = currentActivityState != null
+                ? currentActivityState
+                : (currentRows.isEmpty()
+                        ? participants.get(0).getStateName()
+                        : currentRows.get(0).getStateName());
 
-        // yourRow: the participant row that matches the logged-in user.
-        // Look across BOTH the division gate AND the owner row, so the owner
-        // viewing the detail screen also gets their own 'yourStatus' populated.
-        ParallelParticipantEntity yourRow = participants.stream()
-                .filter(p -> userUuid.equals(p.getApproverUserUuid()))
-                .filter(p -> "PENDINGATCONCERNEDDIVISION".equalsIgnoreCase(p.getStateName())
-                          || "OWNER".equalsIgnoreCase(p.getDivisionCode()))
-                .findFirst()
-                .orElse(null);
+        // yourRow: the row that represents the logged-in user's status AT THE
+        // CURRENT STAGE. If the same user holds two participant rows (e.g.
+        // both a gate approver AND the owner approver), we must pick the one
+        // that matches what the user is being asked to do RIGHT NOW —
+        // otherwise we'd surface "APPROVED" from their old gate vote while
+        // they still have a pending owner decision.
+        ParallelParticipantEntity yourRow = pickYourRow(
+                participants, userUuid, currentActivityState, stateName);
 
         // ---- 2. upstream activity + project ----
         JsonNode activity = activityDetailsClient.fetchActivity(activityId);
@@ -274,6 +282,82 @@ public class ApprovalDetailService {
         if (v.isMissingNode() || v.isNull()) return null;
         String t = v.asText();
         return StringUtils.hasText(t) ? t : null;
+    }
+
+    /**
+     * Pick the participant row that represents "you, right now" for the
+     * detail screen. Rule:
+     *
+     * <ol>
+     *   <li>If activity is currently at {@code PENDINGATCONCERNEDDIVISION},
+     *       prefer the user's gate row.</li>
+     *   <li>If activity is at {@code PENDINGATOWNERDIVISION} or
+     *       {@code ACTIVITYCOMPLETED}, prefer the user's OWNER row.</li>
+     *   <li>Otherwise (e.g. {@code READYFORAPPROVAL}), use the gate row
+     *       if it exists; OWNER row if not.</li>
+     * </ol>
+     *
+     * <p>This matters when one human is both a division approver and the
+     * owner approver. Without contextual selection we'd show "APPROVED"
+     * (their gate vote) while they still have a pending owner decision.</p>
+     */
+    /**
+     * Pick the participant row that represents the logged-in user's status
+     * "right now". Resolution order:
+     *
+     * <ol>
+     *   <li>{@code requestedStateName} matches one of the user's rows
+     *       → return that row. Lets the UI say "I want owner-stage
+     *       status" by passing {@code stateName=PENDINGATOWNERDIVISION}
+     *       (matches OWNER row), even when the activity hasn't yet
+     *       transitioned to that state.</li>
+     *   <li>Else, the row whose stateName aligns with the activity's
+     *       current workflow state.</li>
+     *   <li>Else, a sensible default - gate row if available, owner row otherwise.</li>
+     * </ol>
+     *
+     * <p>This matters when one human is both a division approver and the
+     * owner approver. Without contextual selection we'd show "APPROVED"
+     * (their gate vote) while they still have a pending owner decision.</p>
+     */
+    private ParallelParticipantEntity pickYourRow(
+            List<ParallelParticipantEntity> participants,
+            String userUuid,
+            String currentActivityState,
+            String requestedStateName) {
+
+        List<ParallelParticipantEntity> mine = participants.stream()
+                .filter(p -> userUuid.equals(p.getApproverUserUuid()))
+                .toList();
+        if (mine.isEmpty()) return null;
+
+        ParallelParticipantEntity gateRow = mine.stream()
+                .filter(p -> "PENDINGATCONCERNEDDIVISION".equalsIgnoreCase(p.getStateName()))
+                .findFirst().orElse(null);
+        ParallelParticipantEntity ownerRow = mine.stream()
+                .filter(p -> "OWNER".equalsIgnoreCase(p.getDivisionCode()))
+                .findFirst().orElse(null);
+
+        // Explicit override from the UI - highest priority.
+        if (requestedStateName != null && !requestedStateName.isBlank()) {
+            ParallelParticipantEntity match = mine.stream()
+                    .filter(p -> requestedStateName.equalsIgnoreCase(p.getStateName()))
+                    .findFirst().orElse(null);
+            if (match != null) return match;
+        }
+
+        if (currentActivityState == null) {
+            return gateRow != null ? gateRow : ownerRow;
+        }
+
+        return switch (currentActivityState.toUpperCase()) {
+            case "PENDINGATOWNERDIVISION", "ACTIVITYCOMPLETED"
+                    -> ownerRow != null ? ownerRow : gateRow;
+            case "PENDINGATCONCERNEDDIVISION"
+                    -> gateRow != null ? gateRow : ownerRow;
+            default
+                    -> gateRow != null ? gateRow : ownerRow;
+        };
     }
 
     /**

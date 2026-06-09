@@ -2,7 +2,6 @@ package com.pmis.activityworkflow.service.parallel;
 
 import com.pmis.activityworkflow.entity.DocumentEntity;
 import com.pmis.activityworkflow.entity.ParallelParticipantEntity;
-import com.pmis.activityworkflow.entity.ProcessInstanceEntity;
 import com.pmis.activityworkflow.exception.InvalidTransitionException;
 import com.pmis.activityworkflow.repository.ParallelParticipantRepository;
 import com.pmis.activityworkflow.repository.ProcessInstanceRepository;
@@ -136,14 +135,23 @@ public class ApprovalRequestService {
                             + req.getActivityId() + " - upstream assignments returned nothing");
         }
 
-        // 2b. If the activity got here via the path
-        //     PENDINGATOWNERDIVISION ──RETURN_TO_VENDOR──> READYFORAPPROVAL ──SUBMIT──> PENDINGATCONCERNEDDIVISION,
-        //     the divisions should re-vote from scratch — vendor reworked the
-        //     deliverable. Reset every approver row to PENDING so all of them
-        //     get a fresh approval-request email (not just the never-voted ones).
-        boolean resetAfterOwnerReject = false;
-        if (!seeded && isResubmitAfterOwnerReject(req)) {
-            resetAfterOwnerReject = resetApproversToPending(approvers);
+        // 2b. If any approver row is currently REJECTED, reset every row
+        //     to PENDING and re-email everyone. This covers all rejection
+        //     flows uniformly:
+        //       - division approver rejected at the gate (ANY_REJECTED auto-fire)
+        //       - owner clicked Return to Vendor (RETURN_TO_VENDOR transition)
+        //       - admin clicked request-division-approval immediately after
+        //         a rejection vote, without re-SUBMITting
+        //     In every case, a REJECTED row means the gate has to restart,
+        //     so wipe the slate and re-notify everyone.
+        //
+        //     Already-APPROVED rows on a normal re-send (no rejection in
+        //     play) are still skipped — they don't need to re-vote.
+        boolean didReset = false;
+        boolean anyRejected = approvers.stream()
+                .anyMatch(p -> ParallelGateService.VOTE_REJECTED.equals(p.getVoteStatus()));
+        if (!seeded && anyRejected) {
+            didReset = resetApproversToPending(approvers);
             // Re-read so 'toNotify' sees the updated voteStatus values.
             approvers = participantRepository
                     .findByBusinessServiceAndActivityIdAndStateName(
@@ -154,65 +162,23 @@ public class ApprovalRequestService {
 
         // 3. Notify every currently-PENDING approver.
         //    On a normal re-send, already-APPROVED rows are skipped (still APPROVED).
-        //    After an owner-reject reset, every row is PENDING — everyone re-emailed.
+        //    After a reject reset, every row is PENDING — everyone re-emailed.
         List<ParallelParticipantEntity> toNotify = approvers.stream()
                 .filter(p -> ParallelGateService.VOTE_PENDING.equals(p.getVoteStatus()))
                 .toList();
 
-        notificationClient.notifyApprovalRequested(toNotify, /* isResubmission */ resetAfterOwnerReject);
+        notificationClient.notifyApprovalRequested(toNotify, /* isResubmission */ didReset);
 
         log.info("Division approval requested by admin for activity {} (state {}) - "
                         + "{} approver(s) total, {} notified{}{}{}",
                 req.getActivityId(), stateName,
                 approvers.size(), toNotify.size(),
                 seeded ? ", just seeded" : "",
-                resetAfterOwnerReject ? ", reset-after-owner-reject" : "",
+                didReset ? ", reset-after-reject" : "",
                 doc == null ? "" : ", attached doc " + doc.getUuid());
 
         return new RequestDivisionApprovalResult(
                 doc, approvers.size(), toNotify.size(), seeded);
-    }
-
-    /**
-     * True when the activity's history shows it just came back from the
-     * owner via RETURN_TO_VENDOR (or REJECT, the legacy alias) and was
-     * then re-SUBMITted. Walks {@code aw_process_instance} oldest→newest
-     * and looks for a RETURN_TO_VENDOR followed by a SUBMIT with no
-     * intervening ALL_APPROVED.
-     *
-     * <p>That last condition matters: once the divisions re-approve and
-     * the activity advances back to the owner, we shouldn't keep
-     * treating subsequent calls as "post-owner-reject" forever.</p>
-     */
-    private boolean isResubmitAfterOwnerReject(RequestDivisionApprovalRequest req) {
-        List<ProcessInstanceEntity> history = processRepository
-                .findByBusinessServiceAndActivityIdOrderByAuditDetails_CreatedTimeAsc(
-                        req.getBusinessService(), req.getActivityId());
-        if (history.isEmpty()) return false;
-
-        boolean ownerReturnedToVendor = false;
-        for (ProcessInstanceEntity p : history) {
-            String action = p.getActionName();
-            if (action == null) continue;
-            switch (action.toUpperCase()) {
-                case "RETURN_TO_VENDOR",
-                     "RETURNTOVENDOR",
-                     "REJECT"           -> ownerReturnedToVendor = true;
-                // ALL_APPROVED past a RETURN_TO_VENDOR means the divisions
-                // already re-approved once - we're not in the post-reject
-                // window anymore.
-                case "ALL_APPROVED"     -> ownerReturnedToVendor = false;
-                default                 -> { /* SUBMIT, votes, etc — irrelevant */ }
-            }
-        }
-
-        // The latest row should be a SUBMIT (that's what just placed us
-        // on PENDINGATCONCERNEDDIVISION).
-        ProcessInstanceEntity latest = history.get(history.size() - 1);
-        boolean latestIsSubmit = latest.getActionName() != null
-                && latest.getActionName().equalsIgnoreCase("SUBMIT");
-
-        return ownerReturnedToVendor && latestIsSubmit;
     }
 
     /**

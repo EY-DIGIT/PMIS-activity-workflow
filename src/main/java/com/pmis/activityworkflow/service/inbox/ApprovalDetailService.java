@@ -127,34 +127,21 @@ public class ApprovalDetailService {
         List<OrganizationSubmission> submissions = fetchSubmissions(activityId);
 
         // ---- 5. per-division status rows ----
-        // Always show every approver that was seeded for this activity in the
-        // breakdown — divisions first (in seed order), then the OWNER row at
-        // the end. The OWNER row is anchored to PENDINGATOWNERDIVISION so it
-        // wasn't picked up by 'currentRows' (which is concerned-division only)
-        // and would otherwise be silently dropped from the response.
+        // Scoped by the screen the UI is on:
+        //   - stateName == PENDINGATCONCERNEDDIVISION → only gate rows
+        //   - stateName == PENDINGATOWNERDIVISION    → only OWNER row
+        //   - stateName missing → both (legacy behavior)
+        boolean includeGate  = !"PENDINGATOWNERDIVISION".equalsIgnoreCase(stateName);
+        boolean includeOwner = !"PENDINGATCONCERNEDDIVISION".equalsIgnoreCase(stateName);
+
         List<ParallelParticipantEntity> ownerRows = participants.stream()
                 .filter(p -> "OWNER".equalsIgnoreCase(p.getDivisionCode()))
                 .toList();
 
         List<DivisionStatus> breakdown = new ArrayList<>(currentRows.size() + 1);
-        for (ParallelParticipantEntity p : currentRows) {
-            breakdown.add(DivisionStatus.builder()
-                    .divisionCode(p.getDivisionCode())
-                    .divisionName(p.getDivisionName())
-                    .approverUserUuid(p.getApproverUserUuid())
-                    .approverName(p.getApproverName())
-                    .voteStatus(p.getVoteStatus())
-                    .votedAt(p.getVotedAt())
-                    .isYou(userUuid.equals(p.getApproverUserUuid()))
-                    .build());
-        }
 
-        // Append the OWNER row. If the activity has a real DB row (modern
-        // seeding), use it. Otherwise (legacy activity, pre-owner-seed) fall
-        // back to the upstream assignments API so the response always shows
-        // an owner entry alongside the division approvers.
-        if (!ownerRows.isEmpty()) {
-            for (ParallelParticipantEntity p : ownerRows) {
+        if (includeGate) {
+            for (ParallelParticipantEntity p : currentRows) {
                 breakdown.add(DivisionStatus.builder()
                         .divisionCode(p.getDivisionCode())
                         .divisionName(p.getDivisionName())
@@ -165,9 +152,29 @@ public class ApprovalDetailService {
                         .isYou(userUuid.equals(p.getApproverUserUuid()))
                         .build());
             }
-        } else {
-            DivisionStatus synthesized = synthesizeOwnerFromUpstream(activityId, userUuid);
-            if (synthesized != null) breakdown.add(synthesized);
+        }
+
+        // Append the OWNER row. If the activity has a real DB row (modern
+        // seeding), use it. Otherwise (legacy activity, pre-owner-seed) fall
+        // back to the upstream assignments API so the response always shows
+        // an owner entry alongside the division approvers.
+        if (includeOwner) {
+            if (!ownerRows.isEmpty()) {
+                for (ParallelParticipantEntity p : ownerRows) {
+                    breakdown.add(DivisionStatus.builder()
+                            .divisionCode(p.getDivisionCode())
+                            .divisionName(p.getDivisionName())
+                            .approverUserUuid(p.getApproverUserUuid())
+                            .approverName(p.getApproverName())
+                            .voteStatus(p.getVoteStatus())
+                            .votedAt(p.getVotedAt())
+                            .isYou(userUuid.equals(p.getApproverUserUuid()))
+                            .build());
+                }
+            } else {
+                DivisionStatus synthesized = synthesizeOwnerFromUpstream(activityId, userUuid);
+                if (synthesized != null) breakdown.add(synthesized);
+            }
         }
 
         // ---- 6. assemble ----

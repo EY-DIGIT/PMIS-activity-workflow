@@ -73,8 +73,22 @@ public class ApprovalRequestService {
         //    → PENDINGATCONCERNEDDIVISION default.
         String stateName = resolveStateName(req);
 
-        // Audit the button click up-front. Uses REQUIRES_NEW so the entry
-        // survives even if seeding/notification rolls back later.
+        // 1. Upload first. If the upstream comments API rejects the file or
+        //    the network call fails, we throw out of this method here BEFORE
+        //    writing any audit row, seeding any participants, or sending any
+        //    notifications. The caller gets a 4xx/5xx and no DB state has
+        //    been touched. This is the contract the UI relies on for
+        //    "an action is committed only if its document upload succeeds".
+        DocumentEntity doc = uploadIfPresent(file, req.getRequestInfo(),
+                req.getBusinessService(),
+                req.getActivityId(),
+                req.getProjectId(),
+                req.getComment(),
+                "DIVISION_APPROVAL_REQUEST");
+
+        // 2. Audit the button click — only reached if upload succeeded (or
+        //    there was no upload to do). REQUIRES_NEW so the row commits
+        //    even if a later step inside this @Transactional rolls back.
         auditService.recordButtonClick(new ButtonAuditContext(
                 "REQUEST_DIVISION_APPROVAL",
                 req.getBusinessService(),
@@ -86,16 +100,8 @@ public class ApprovalRequestService {
                 req.getRequestInfo(),
                 req));
 
-        // 1. Optional upload first — outside any tx-sensitive work.
-        DocumentEntity doc = uploadIfPresent(file, req.getRequestInfo(),
-                req.getBusinessService(),
-                req.getActivityId(),
-                req.getProjectId(),
-                req.getComment(),
-                "DIVISION_APPROVAL_REQUEST");
-
-        // 2. Auto-seed if nothing is there yet. Idempotent — if rows already
-        //    exist, this is a no-op and we move straight to step 3.
+        // 3. Auto-seed if nothing is there yet. Idempotent — if rows already
+        //    exist, this is a no-op and we move straight to step 4.
         boolean seeded = false;
         List<ParallelParticipantEntity> approvers = participantRepository
                 .findByBusinessServiceAndActivityIdAndStateName(
@@ -238,11 +244,22 @@ public class ApprovalRequestService {
             RequestOwnerApprovalRequest req,
             MultipartFile file) {
 
-        // Audit the click. This logs the BUTTON_CLICK; the subsequent
-        // ALL_APPROVED transition will produce its own SUCCESS audit row.
-        // So in the trail you'll see two rows for one click:
-        //   1) BUTTON_CLICK action=REQUEST_OWNER_APPROVAL
-        //   2) SUCCESS      action=ALL_APPROVED
+        // 1. Upload first. If upstream rejects the file or the network
+        //    call fails, throw out HERE before audit, before validation,
+        //    before the ALL_APPROVED transition fires. Caller gets 4xx/5xx
+        //    and the workflow remains untouched.
+        DocumentEntity doc = uploadIfPresent(file, req.getRequestInfo(),
+                req.getBusinessService(),
+                req.getActivityId(),
+                req.getProjectId(),
+                req.getComment(),
+                "OWNER_APPROVAL_REQUEST");
+
+        // 2. Audit the click — only after upload succeeds. The subsequent
+        //    ALL_APPROVED transition will produce its own SUCCESS audit row,
+        //    so in the trail you'll see two rows for one click:
+        //       1) BUTTON_CLICK action=REQUEST_OWNER_APPROVAL
+        //       2) SUCCESS      action=ALL_APPROVED
         auditService.recordButtonClick(new ButtonAuditContext(
                 "REQUEST_OWNER_APPROVAL",
                 req.getBusinessService(),
@@ -254,15 +271,7 @@ public class ApprovalRequestService {
                 req.getRequestInfo(),
                 req));
 
-        // 1. Optional upload — same shape as division side.
-        DocumentEntity doc = uploadIfPresent(file, req.getRequestInfo(),
-                req.getBusinessService(),
-                req.getActivityId(),
-                req.getProjectId(),
-                req.getComment(),
-                "OWNER_APPROVAL_REQUEST");
-
-        // 2. Validate-and-fire. This raises if any participant is still
+        // 3. Validate-and-fire. This raises if any participant is still
         //    PENDING or REJECTED. On success the resulting transition
         //    dispatches the READY_FOR_OWNER_REVIEW notification to the
         //    owner approver from upstream assignments.

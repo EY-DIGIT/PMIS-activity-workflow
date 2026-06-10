@@ -8,6 +8,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -59,7 +61,7 @@ public class MilestoneCommentsClient {
                                                 String commentBody) {
         validateConfig();
         validateActivityId(activityId);
-        validateFile(file);
+        validateFile(file, commentBody);
 
         String auth = currentAuthHeader();
         if (!StringUtils.hasText(auth)) {
@@ -67,15 +69,41 @@ public class MilestoneCommentsClient {
                     "Authorization header is required to call the comments API");
         }
 
-        // POST comment + file directly using the activityId
+        // POST comment + (optional) file directly using the activityId
         String url = props.getCommentsUrlTemplate().replace("{activityId}", activityId);
         try {
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
             // 'body' carries the comment text (admin's modal note)
             body.add(props.getBodyField(),
                     commentBody == null ? "Document uploaded" : commentBody);
-            // 'files' carries the attached file
-            body.add(props.getFilesField(), toFilePart(file));
+            // 'files' carries the attached file - omitted entirely for
+            // comment-only posts so the upstream sees a clean multipart
+            // without an empty 'files' part. We wrap in an HttpEntity so
+            // the part carries the file's actual Content-Type (e.g.
+            // application/vnd.ms-excel for .xls) instead of the
+            // application/octet-stream default that Spring uses for raw
+            // Resource parts. Some upstreams reject octet-stream for
+            // common office/image formats.
+            if (file != null && !file.isEmpty()) {
+                HttpHeaders fileHeaders = new HttpHeaders();
+                String detected = file.getContentType();
+                MediaType mediaType;
+                try {
+                    mediaType = (detected != null && !detected.isBlank())
+                            ? MediaType.parseMediaType(detected)
+                            : MediaType.APPLICATION_OCTET_STREAM;
+                } catch (Exception parseFail) {
+                    log.warn("Could not parse client-supplied Content-Type '{}', "
+                            + "falling back to application/octet-stream", detected);
+                    mediaType = MediaType.APPLICATION_OCTET_STREAM;
+                }
+                fileHeaders.setContentType(mediaType);
+                HttpEntity<Resource> filePart = new HttpEntity<>(toFilePart(file), fileHeaders);
+                body.add(props.getFilesField(), filePart);
+
+                log.info("Uploading file '{}' (size={}, contentType={}) to upstream comments for activity {}",
+                        file.getOriginalFilename(), file.getSize(), mediaType, activityId);
+            }
 
             String raw = milestoneCommentsRestClient.post()
                     .uri(url)
@@ -128,11 +156,17 @@ public class MilestoneCommentsClient {
         }
     }
 
-    private void validateFile(MultipartFile file) {
-        if (file == null || file.isEmpty()) {
-            throw new InvalidTransitionException("File is required and must not be empty");
+    private void validateFile(MultipartFile file, String commentBody) {
+        // Comment-only posts are allowed - file is optional - but we must
+        // have SOMETHING to send, otherwise the upstream call is a no-op
+        // that returns 422.
+        boolean hasFile    = file != null && !file.isEmpty();
+        boolean hasComment = StringUtils.hasText(commentBody);
+        if (!hasFile && !hasComment) {
+            throw new InvalidTransitionException(
+                    "Either a file or a non-blank comment is required");
         }
-        if (file.getSize() > props.getMaxFileSizeBytes()) {
+        if (hasFile && file.getSize() > props.getMaxFileSizeBytes()) {
             throw new InvalidTransitionException(String.format(
                     "File '%s' exceeds max allowed size of %d bytes",
                     file.getOriginalFilename(), props.getMaxFileSizeBytes()));

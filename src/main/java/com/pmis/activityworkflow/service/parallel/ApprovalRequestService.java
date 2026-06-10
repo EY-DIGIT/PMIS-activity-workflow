@@ -290,7 +290,12 @@ public class ApprovalRequestService {
                                            String projectId,
                                            String comment,
                                            String documentType) {
-        if (file == null || file.isEmpty()) return null;
+        // Skip the upstream call only when there's nothing to send.
+        // A comment-only post (no file) is allowed and will produce an
+        // aw_document row with docId set to the upstream comment id.
+        boolean hasFile    = file != null && !file.isEmpty();
+        boolean hasComment = comment != null && !comment.isBlank();
+        if (!hasFile && !hasComment) return null;
 
         DocumentMetadata meta = new DocumentMetadata(
                 documentType, activityId, projectId,

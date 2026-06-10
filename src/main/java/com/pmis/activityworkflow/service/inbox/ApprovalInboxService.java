@@ -63,12 +63,14 @@ public class ApprovalInboxService {
                             .orElse(null));
         }
 
-        // Hide rows whose state the activity hasn't reached. Example: the
-        // OWNER row is auto-seeded at activity submission time so without
-        // this filter it would appear in the owner's inbox even while the
-        // divisions are still voting at the gate.
+        // Hide rows whose state the activity hasn't reached YET, UNLESS the
+        // user has already voted on the row. The vote-exception keeps
+        // historical actions visible after a rejection rewinds the activity:
+        // e.g. an approver rejects at the gate → activity goes back to
+        // READYFORAPPROVAL → the row should still appear in their inbox
+        // with voteStatus=REJECTED, not vanish.
         List<ParallelParticipantEntity> visible = rows.stream()
-                .filter(p -> isAtOrPastRowState(
+                .filter(p -> hasUserActed(p) || isAtOrPastRowState(
                         currentStateByActivity.get(p.getActivityId()),
                         p.getStateName()))
                 .toList();
@@ -107,6 +109,17 @@ public class ApprovalInboxService {
         int rowIdx     = STATE_ORDER.indexOf(rowState);
         if (currentIdx == -1 || rowIdx == -1) return true;
         return currentIdx >= rowIdx;
+    }
+
+    /**
+     * True if the user has already cast a vote on this row (APPROVED,
+     * REJECTED, RETURNED — anything other than PENDING). Used to keep
+     * historical entries visible in the inbox even after a workflow
+     * rewind drops the activity back below the row's state.
+     */
+    private boolean hasUserActed(ParallelParticipantEntity p) {
+        String vs = p.getVoteStatus();
+        return vs != null && !"PENDING".equalsIgnoreCase(vs);
     }
 
     private ApprovalInboxItem buildRow(ParallelParticipantEntity p,

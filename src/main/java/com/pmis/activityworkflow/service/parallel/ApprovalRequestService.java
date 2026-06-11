@@ -2,6 +2,7 @@ package com.pmis.activityworkflow.service.parallel;
 
 import com.pmis.activityworkflow.entity.DocumentEntity;
 import com.pmis.activityworkflow.entity.ParallelParticipantEntity;
+import com.pmis.activityworkflow.entity.ProcessInstanceEntity;
 import com.pmis.activityworkflow.exception.InvalidTransitionException;
 import com.pmis.activityworkflow.repository.ParallelParticipantRepository;
 import com.pmis.activityworkflow.repository.ProcessInstanceRepository;
@@ -141,29 +142,35 @@ public class ApprovalRequestService {
                             + req.getActivityId() + " - upstream assignments returned nothing");
         }
 
-        // 2b. If any approver row is currently REJECTED, reset every row
-        //     to PENDING and re-email everyone. This covers all rejection
-        //     flows uniformly:
-        //       - division approver rejected at the gate (ANY_REJECTED auto-fire)
-        //       - owner clicked Return to Vendor (RETURN_TO_VENDOR transition)
-        //       - admin clicked request-division-approval immediately after
-        //         a rejection vote, without re-SUBMITting
-        //     In every case, a REJECTED row means the gate has to restart,
-        //     so wipe the slate and re-notify everyone.
+        // 2b. Decide which approver rows to reset, if any:
         //
-        //     Already-APPROVED rows on a normal re-send (no rejection in
-        //     play) are still skipped — they don't need to re-vote.
+        //  - Owner-side rejection (RETURN_TO_VENDOR + new SUBMIT, no
+        //    intervening ALL_APPROVED): the entire round is invalidated,
+        //    so reset ALL non-PENDING rows. Divisions re-vote fresh.
+        //
+        //  - Gate-side rejection (any approver REJECTED while we're still
+        //    in PENDINGATCONCERNEDDIVISION): only reset the REJECTED rows.
+        //    Approved divisions keep their vote and don't get re-emailed.
+        //
+        //  - No rejections in play: normal nudge — no reset.
         boolean didReset = false;
-        boolean anyRejected = approvers.stream()
-                .anyMatch(p -> ParallelGateService.VOTE_REJECTED.equals(p.getVoteStatus()));
-        if (!seeded && anyRejected) {
-            didReset = resetApproversToPending(approvers);
-            // Re-read so 'toNotify' sees the updated voteStatus values.
-            approvers = participantRepository
-                    .findByBusinessServiceAndActivityIdAndStateName(
-                            req.getBusinessService(),
-                            req.getActivityId(),
-                            stateName);
+        boolean resetAll = false;
+        if (!seeded) {
+            if (isResubmitAfterOwnerReject(req)) {
+                didReset  = resetApproversToPending(approvers, /* rejectedOnly */ false);
+                resetAll  = didReset;
+            } else if (approvers.stream().anyMatch(
+                    p -> ParallelGateService.VOTE_REJECTED.equals(p.getVoteStatus()))) {
+                didReset = resetApproversToPending(approvers, /* rejectedOnly */ true);
+            }
+            if (didReset) {
+                // Re-read so 'toNotify' sees the updated voteStatus values.
+                approvers = participantRepository
+                        .findByBusinessServiceAndActivityIdAndStateName(
+                                req.getBusinessService(),
+                                req.getActivityId(),
+                                stateName);
+            }
         }
 
         // 3. Notify every currently-PENDING approver.
@@ -191,27 +198,81 @@ public class ApprovalRequestService {
      * Flip every approver row to PENDING and clear the per-vote fields.
      * Returns true if any row was actually changed.
      */
-    private boolean resetApproversToPending(List<ParallelParticipantEntity> approvers) {
+    /**
+     * Flip approver rows back to PENDING and clear their vote/notify state.
+     *
+     * @param approvers       all approvers at the current state
+     * @param rejectedOnly    when true, ONLY rows currently in REJECTED are
+     *                        reset (APPROVED rows are untouched — they keep
+     *                        their vote). When false, every non-PENDING row
+     *                        is reset.
+     * @return true if at least one row was modified
+     */
+    private boolean resetApproversToPending(List<ParallelParticipantEntity> approvers,
+                                            boolean rejectedOnly) {
         long now = System.currentTimeMillis();
         boolean changed = false;
+        int rejectedReset = 0;
+        int approvedReset = 0;
         for (ParallelParticipantEntity p : approvers) {
-            if (!ParallelGateService.VOTE_PENDING.equals(p.getVoteStatus())) {
-                p.setVoteStatus(ParallelGateService.VOTE_PENDING);
-                p.setVoteComment(null);
-                p.setVotedAt(null);
-                p.setNotifyStatus("PENDING");
-                p.setNotifyError(null);
-                p.setNotifyAttemptedAt(null);
-                p.setUpdatedAt(now);
-                changed = true;
-            }
+            String vs = p.getVoteStatus();
+            if (ParallelGateService.VOTE_PENDING.equals(vs)) continue;
+            boolean isRejected = ParallelGateService.VOTE_REJECTED.equals(vs);
+            if (rejectedOnly && !isRejected) continue;
+
+            if (isRejected) rejectedReset++; else approvedReset++;
+            p.setVoteStatus(ParallelGateService.VOTE_PENDING);
+            p.setVoteComment(null);
+            p.setVotedAt(null);
+            p.setNotifyStatus("PENDING");
+            p.setNotifyError(null);
+            p.setNotifyAttemptedAt(null);
+            p.setUpdatedAt(now);
+            changed = true;
         }
         if (changed) {
             participantRepository.saveAll(approvers);
-            log.info("Reset {} approver row(s) to PENDING after owner-reject re-submit",
-                    approvers.size());
+            log.info("Reset {} REJECTED + {} APPROVED approver row(s) to PENDING "
+                    + "(rejectedOnly={})", rejectedReset, approvedReset, rejectedOnly);
         }
         return changed;
+    }
+
+    /**
+     * True when the activity's history shows it just came back from the
+     * owner via RETURN_TO_VENDOR (or REJECT, the legacy alias) and was
+     * then re-SUBMITted with no intervening ALL_APPROVED. Used to
+     * differentiate the owner-reject recovery flow (reset ALL rows) from
+     * the gate-reject flow (reset only REJECTED rows).
+     */
+    private boolean isResubmitAfterOwnerReject(RequestDivisionApprovalRequest req) {
+        List<ProcessInstanceEntity> history = processRepository
+                .findByBusinessServiceAndActivityIdOrderByAuditDetails_CreatedTimeAsc(
+                        req.getBusinessService(), req.getActivityId());
+        if (history.isEmpty()) return false;
+
+        boolean ownerReturnedToVendor = false;
+        for (ProcessInstanceEntity p : history) {
+            String action = p.getActionName();
+            if (action == null) continue;
+            switch (action.toUpperCase()) {
+                case "RETURN_TO_VENDOR",
+                     "RETURNTOVENDOR",
+                     "REJECT"           -> ownerReturnedToVendor = true;
+                // ALL_APPROVED past a RETURN_TO_VENDOR means the divisions
+                // already re-approved once - we're no longer in the
+                // post-owner-reject window.
+                case "ALL_APPROVED"     -> ownerReturnedToVendor = false;
+                default                 -> { /* SUBMIT, votes, etc — irrelevant */ }
+            }
+        }
+
+        // The latest row should be a SUBMIT (that's what placed us back
+        // on PENDINGATCONCERNEDDIVISION after the owner reject).
+        ProcessInstanceEntity latest = history.get(history.size() - 1);
+        boolean latestIsSubmit = latest.getActionName() != null
+                && latest.getActionName().equalsIgnoreCase("SUBMIT");
+        return ownerReturnedToVendor && latestIsSubmit;
     }
 
     /**

@@ -25,13 +25,13 @@ public class WorkflowAuditController {
     private final WorkflowAuditRepository auditRepository;
 
     @GetMapping("/{businessService}/{activityId}")
-    @Operation(summary = "Full audit trail for a activityId (oldest first)")
+    @Operation(summary = "Full audit trail for an activityId (newest first)")
     public ResponseEntity<List<WorkflowAuditEntity>> byActivityId(
             @PathVariable String businessService,
             @PathVariable String activityId) {
 
         return ResponseEntity.ok(
-                auditRepository.findByBusinessServiceAndActivityIdOrderByCreatedTimeAsc(
+                auditRepository.findByBusinessServiceAndActivityIdOrderByCreatedTimeDesc(
                         businessService, activityId));
     }
 

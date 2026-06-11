@@ -15,6 +15,11 @@ public interface WorkflowAuditRepository
         findByBusinessServiceAndActivityIdOrderByCreatedTimeAsc(String businessService,
                                                                String activityId);
 
+    /** Audit trail for one record, newest first - used by the audit endpoint. */
+    List<WorkflowAuditEntity>
+        findByBusinessServiceAndActivityIdOrderByCreatedTimeDesc(String businessService,
+                                                                String activityId);
+
     /**
      * Audit trail for an activity, oldest first — businessService not required.
      * An activity belongs to exactly one workflow in this system, so the

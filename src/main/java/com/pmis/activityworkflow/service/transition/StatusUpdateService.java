@@ -106,9 +106,14 @@ public class StatusUpdateService {
         String mapped = switch (action.toUpperCase()) {
             case "APPROVE"                                            -> "APPROVED";
             case "REJECT", "RETURN_TO_VENDOR", "RETURNTOVENDOR"       -> "REJECTED";
+            // RETURN_TO_DIVISION is also a rejection from the owner's
+            // perspective — sends the activity back for re-examination.
+            // Map to REJECTED so the UI's existing rejection styling
+            // (red badge, "You rejected this request" banner) kicks in
+            // without needing a separate display value.
             case "RETURN_TO_DIVISION",
                  "OWNER_RETURN_TO_DIVISIONS",
-                 "RETURNTOCONCERNEDDIVISION"                          -> "RETURNED";
+                 "RETURNTOCONCERNEDDIVISION"                          -> "REJECTED";
             default                                                   -> null;
         };
         if (mapped == null) return;

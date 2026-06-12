@@ -61,6 +61,18 @@ public class ApprovalDetailResponse {
     /* ----- per-division status ----- */
     private List<DivisionStatus> yourStatusBreakdown;
 
+    /**
+     * All concerned-division approvers configured for this activity,
+     * regardless of the {@code stateName} filter applied to
+     * {@link #yourStatusBreakdown}. Always populated.
+     *
+     * <p>The UI uses this to render the "Return to Concerned Division"
+     * modal on the owner screen — it needs to know which divisions can
+     * be picked for re-examination even though the breakdown above is
+     * scoped to the owner row.</p>
+     */
+    private List<DivisionStatus> availableDivisions;
+
     /* ============================================================ */
 
     /**

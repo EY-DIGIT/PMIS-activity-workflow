@@ -177,6 +177,31 @@ public class ApprovalDetailService {
             }
         }
 
+        // ---- 5b. availableDivisions — always populated with concerned-
+        //          division (gate) approvers, regardless of the stateName
+        //          filter on yourStatusBreakdown OR the activity's current
+        //          workflow state. Sourced directly from ALL participant
+        //          rows whose stateName is PENDINGATCONCERNEDDIVISION,
+        //          so the list is the same whether the activity is mid-gate,
+        //          past it (owner stage), or rewound back to READYFORAPPROVAL.
+        //          Used by the UI's "Return to Concerned Division" modal
+        //          on the owner screen.
+        List<ParallelParticipantEntity> gateRows = participants.stream()
+                .filter(p -> "PENDINGATCONCERNEDDIVISION".equalsIgnoreCase(p.getStateName()))
+                .toList();
+        List<DivisionStatus> availableDivisions = new ArrayList<>(gateRows.size());
+        for (ParallelParticipantEntity p : gateRows) {
+            availableDivisions.add(DivisionStatus.builder()
+                    .divisionCode(p.getDivisionCode())
+                    .divisionName(p.getDivisionName())
+                    .approverUserUuid(p.getApproverUserUuid())
+                    .approverName(p.getApproverName())
+                    .voteStatus(p.getVoteStatus())
+                    .votedAt(p.getVotedAt())
+                    .isYou(userUuid.equals(p.getApproverUserUuid()))
+                    .build());
+        }
+
         // ---- 6. assemble ----
         return ApprovalDetailResponse.builder()
                 .activityId(activityId)
@@ -197,6 +222,7 @@ public class ApprovalDetailService {
                 .description(text(activity, "description"))
                 .organizationSubmissions(submissions)
                 .yourStatusBreakdown(breakdown)
+                .availableDivisions(availableDivisions)
                 .build();
     }
 

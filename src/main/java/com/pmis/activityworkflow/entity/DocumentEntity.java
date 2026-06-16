@@ -75,6 +75,14 @@ public class DocumentEntity {
     @JdbcTypeCode(SqlTypes.ARRAY)
     private List<String> uploadedByRoles;
 
+    /* ----- file metadata (populated when a file is attached; null for comment-only uploads) ----- */
+
+    @Column(name = "file_name", length = 512)
+    private String fileName;
+
+    @Column(name = "file_url", length = 2048)
+    private String fileUrl;
+
     /* ----- comment ----- */
 
     @Column(name = "comment", columnDefinition = "text")

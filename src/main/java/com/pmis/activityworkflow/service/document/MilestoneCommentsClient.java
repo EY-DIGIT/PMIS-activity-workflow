@@ -126,7 +126,9 @@ public class MilestoneCommentsClient {
                     .body(String.class);
 
             log.debug("Upstream comments response: {}", raw);
-            return parseResponse(raw, activityId);
+            String originalName = (file != null && StringUtils.hasText(file.getOriginalFilename()))
+                    ? file.getOriginalFilename() : null;
+            return parseResponse(raw, activityId, originalName);
 
         } catch (InvalidTransitionException rethrow) {
             throw rethrow;
@@ -206,7 +208,8 @@ public class MilestoneCommentsClient {
      *   }
      * </pre>
      */
-    private MilestoneCommentResult parseResponse(String raw, String activityId) throws Exception {
+    private MilestoneCommentResult parseResponse(String raw, String activityId,
+                                                  String originalFileName) throws Exception {
         JsonNode root = objectMapper.readTree(raw);
         JsonNode data = root.has("data") && !root.get("data").isNull()
                 ? root.get("data") : root;
@@ -217,24 +220,53 @@ public class MilestoneCommentsClient {
                     "Upstream comments API returned no 'id'. Raw: " + raw);
         }
 
-        // Prefer targetId from the response (authoritative); fall back to the
-        // activityId we sent in.
         String returnedTargetId = data.path("targetId").asText(null);
         String resolvedActivityId = StringUtils.hasText(returnedTargetId)
                 ? returnedTargetId
                 : activityId;
 
-        // Best-effort author info — the upstream knows who its token belongs to.
         JsonNode author = data.path("author");
         String authorEmail = author.path("email").asText(null);
         String authorLogin = author.path("login").asText(null);
+
+        // Try to extract the file URL from the upstream response.
+        // Common shapes: data.files[0].url  or  data.attachments[0].url
+        String fileUrl = extractFileUrl(data);
 
         return MilestoneCommentResult.builder()
                 .docId(docId)
                 .activityId(resolvedActivityId)
                 .authorEmail(authorEmail)
                 .authorLogin(authorLogin)
+                .fileName(originalFileName)
+                .fileUrl(fileUrl)
                 .build();
+    }
+
+    /**
+     * Best-effort extraction of a file download URL from the upstream POST
+     * response. Tries the shapes we've seen in the wild; returns null if none match.
+     */
+    private String extractFileUrl(JsonNode data) {
+        // Shape 1: data.files is an array
+        JsonNode files = data.path("files");
+        if (files.isArray() && !files.isEmpty()) {
+            String url = files.get(0).path("url").asText(null);
+            if (StringUtils.hasText(url)) return url;
+        }
+        // Shape 2: data.attachments is an array
+        JsonNode attachments = data.path("attachments");
+        if (attachments.isArray() && !attachments.isEmpty()) {
+            String url = attachments.get(0).path("url").asText(null);
+            if (StringUtils.hasText(url)) return url;
+        }
+        // Shape 3: data.file is a single object
+        JsonNode file = data.path("file");
+        if (file.isObject()) {
+            String url = file.path("url").asText(null);
+            if (StringUtils.hasText(url)) return url;
+        }
+        return null;
     }
 
     /** Lift a human-readable message out of the upstream error envelope. */

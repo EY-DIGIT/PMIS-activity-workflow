@@ -144,7 +144,7 @@ public class ParallelGateController {
                  consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Admin button: seed (if needed) + notify every concerned-division approver")
     public ResponseEntity<RequestDivisionApprovalResult> requestDivisionApproval(
-            @RequestPart(value = "files", required = false) List<MultipartFile> files,
+            @RequestPart(value = "file", required = false) List<MultipartFile> files,
             @RequestParam(value = "requestInfo", required = false) String requestInfoJson,
             @RequestParam String businessService,
             @RequestParam String activityId,
@@ -174,7 +174,7 @@ public class ParallelGateController {
                  consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Admin button: advance the activity to the owner-approval stage")
     public ResponseEntity<RequestOwnerApprovalResult> requestOwnerApproval(
-            @RequestPart(value = "files", required = false) List<MultipartFile> files,
+            @RequestPart(value = "file", required = false) List<MultipartFile> files,
             @RequestParam(value = "requestInfo", required = false) String requestInfoJson,
             @RequestParam String businessService,
             @RequestParam String activityId,

@@ -33,4 +33,10 @@ public class MilestoneCommentResult {
 
     /** Author username/login (data.author.login). */
     private String authorLogin;
+
+    /** Original filename from the uploaded file (from MultipartFile, not the upstream response). */
+    private String fileName;
+
+    /** Download URL returned by the upstream comments API for the attached file, if any. */
+    private String fileUrl;
 }

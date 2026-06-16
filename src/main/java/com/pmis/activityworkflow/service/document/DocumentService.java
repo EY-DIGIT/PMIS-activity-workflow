@@ -83,6 +83,8 @@ public class DocumentService {
                         ? stored.getAuthorLogin() : u.username())
                 .uploadedByEmail(stored.getAuthorEmail())
                 .uploadedByRoles(u.roles())
+                .fileName(stored.getFileName())
+                .fileUrl(stored.getFileUrl())
                 .comment(meta.comment())
                 .createdAt(now)
                 .updatedAt(now)

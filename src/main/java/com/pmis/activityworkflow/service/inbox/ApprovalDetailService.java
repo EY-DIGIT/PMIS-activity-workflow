@@ -1,8 +1,10 @@
 package com.pmis.activityworkflow.service.inbox;
 
+import com.pmis.activityworkflow.entity.DocumentEntity;
 import com.pmis.activityworkflow.entity.ParallelParticipantEntity;
 import com.pmis.activityworkflow.entity.ProcessInstanceEntity;
 import com.pmis.activityworkflow.exception.InvalidTransitionException;
+import com.pmis.activityworkflow.repository.DocumentRepository;
 import com.pmis.activityworkflow.repository.ParallelParticipantRepository;
 import com.pmis.activityworkflow.repository.ProcessInstanceRepository;
 import com.pmis.activityworkflow.service.assignments.ActivityAssignmentsClient;
@@ -21,7 +23,9 @@ import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Builds the single payload returned by GET /activities/inbox/{activityId}.
@@ -45,6 +49,7 @@ public class ApprovalDetailService {
     private final ProcessInstanceRepository processRepository;
     private final ActivityDetailsClient activityDetailsClient;
     private final ActivityAssignmentsClient assignmentsClient;
+    private final DocumentRepository documentRepository;
 
     public ApprovalDetailResponse forActivity(String activityId, String userUuid, String stateName) {
 
@@ -239,18 +244,53 @@ public class ApprovalDetailService {
      */
     private List<OrganizationSubmission> fetchSubmissions(String activityId) {
         JsonNode elements = activityDetailsClient.fetchActivityComments(activityId);
+
+        // Build a lookup: upstream comment id → local DocumentEntity rows.
+        // This lets us enrich each comment's attachments from our own aw_document
+        // table, which is reliable even when the upstream GET /comments doesn't
+        // include attachment metadata in its response.
+        Map<String, List<DocumentEntity>> docsByCommentId = documentRepository
+                .findByActivityIdOrderByCreatedAtAsc(activityId)
+                .stream()
+                .filter(d -> d.getDocId() != null && d.getFileName() != null)
+                .collect(Collectors.groupingBy(DocumentEntity::getDocId));
+
         if (elements == null || !elements.isArray() || elements.isEmpty()) {
             return List.of();
         }
 
         List<OrganizationSubmission> out = new ArrayList<>(elements.size());
         for (JsonNode el : elements) {
+            String commentId = text(el, "id");
+
+            // Prefer upstream attachment list; fall back to local DB records.
+            List<Attachment> attachments = toAttachments(el.path("attachments"));
+            if (attachments.isEmpty() && commentId != null) {
+                attachments = toAttachmentsFromDocs(docsByCommentId.get(commentId));
+            }
+
             out.add(OrganizationSubmission.builder()
-                    .commentId(text(el, "id"))
+                    .commentId(commentId)
                     .body(text(el, "body"))
                     .createdAt(text(el, "createdAt"))
                     .author(toAuthor(el.path("author")))
-                    .attachments(toAttachments(el.path("attachments")))
+                    .attachments(attachments)
+                    .build());
+        }
+        return out;
+    }
+
+    private List<Attachment> toAttachmentsFromDocs(List<DocumentEntity> docs) {
+        if (docs == null || docs.isEmpty()) return List.of();
+        List<Attachment> out = new ArrayList<>(docs.size());
+        for (DocumentEntity d : docs) {
+            out.add(Attachment.builder()
+                    .fileName(d.getFileName())
+                    .url(d.getFileUrl())
+                    .uploadedAt(d.getCreatedAt() == null ? null
+                            : java.time.Instant.ofEpochMilli(d.getCreatedAt())
+                                    .atZone(java.time.ZoneId.systemDefault())
+                                    .toString())
                     .build());
         }
         return out;

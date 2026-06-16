@@ -265,7 +265,7 @@ public class ParallelGateService {
 
             divisions.add(DivisionInput.builder()
                     .divisionCode(divisionCode)
-                    .divisionName(divisionCode)        // upstream API doesn't return a separate name
+                    .divisionName(data.resolveDivisionName(divisionCode))  // resolves via divisionRefs (e.g. "tmd-i" → "TMD-I")
                     .approver(ParticipantInput.builder()
                             .approverUserUuid(approver.getId())
                             .approverEmail(approver.getEmail())

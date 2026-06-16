@@ -144,7 +144,7 @@ public class ParallelGateController {
                  consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Admin button: seed (if needed) + notify every concerned-division approver")
     public ResponseEntity<RequestDivisionApprovalResult> requestDivisionApproval(
-            @RequestPart(value = "file", required = false) MultipartFile file,
+            @RequestPart(value = "files", required = false) List<MultipartFile> files,
             @RequestParam(value = "requestInfo", required = false) String requestInfoJson,
             @RequestParam String businessService,
             @RequestParam String activityId,
@@ -160,7 +160,7 @@ public class ParallelGateController {
                 .stateName(stateName)
                 .comment(comment)
                 .build();
-        return ResponseEntity.ok(approvalRequestService.requestDivisionApproval(body, file));
+        return ResponseEntity.ok(approvalRequestService.requestDivisionApproval(body, files));
     }
 
     /**
@@ -174,7 +174,7 @@ public class ParallelGateController {
                  consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Admin button: advance the activity to the owner-approval stage")
     public ResponseEntity<RequestOwnerApprovalResult> requestOwnerApproval(
-            @RequestPart(value = "file", required = false) MultipartFile file,
+            @RequestPart(value = "files", required = false) List<MultipartFile> files,
             @RequestParam(value = "requestInfo", required = false) String requestInfoJson,
             @RequestParam String businessService,
             @RequestParam String activityId,
@@ -190,7 +190,7 @@ public class ParallelGateController {
                 .stateName(stateName)
                 .comment(comment)
                 .build();
-        return ResponseEntity.ok(approvalRequestService.requestOwnerApproval(body, file));
+        return ResponseEntity.ok(approvalRequestService.requestOwnerApproval(body, files));
     }
 
     /* ----- helper ----- */

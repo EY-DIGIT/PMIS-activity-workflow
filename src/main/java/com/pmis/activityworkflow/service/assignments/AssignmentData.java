@@ -37,6 +37,39 @@ public class AssignmentData {
     private Map<String, List<UserRef>> divisionApprovers;
 
     /**
+     * Flat list of division metadata — code + human-readable name.
+     * Used to resolve a human-friendly name from a division code
+     * (e.g. "tmd-i" → "TMD-I").
+     */
+    private List<DivisionRef> divisionRefs;
+
+    /**
+     * Look up the human-readable name for a division code from
+     * {@link #divisionRefs}. Falls back to {@code code} itself if
+     * the ref list is absent or no match is found.
+     */
+    public String resolveDivisionName(String code) {
+        if (code == null) return null;
+        if (divisionRefs == null || divisionRefs.isEmpty()) return code;
+        return divisionRefs.stream()
+                .filter(r -> code.equalsIgnoreCase(r.getCode()))
+                .map(DivisionRef::getName)
+                .findFirst()
+                .orElse(code);
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class DivisionRef {
+        private Integer id;
+        private String code;   // e.g. "tmd-i"
+        private String name;   // e.g. "TMD-I"
+    }
+
+    /**
      * One user reference. Matches the fields in your API response —
      * other fields like login are ignored.
      */

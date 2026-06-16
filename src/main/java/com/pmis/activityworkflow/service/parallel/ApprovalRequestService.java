@@ -67,20 +67,18 @@ public class ApprovalRequestService {
     @Transactional
     public RequestDivisionApprovalResult requestDivisionApproval(
             RequestDivisionApprovalRequest req,
-            MultipartFile file) {
+            List<MultipartFile> files) {
 
         // 0. Resolve which state to seed/notify on.
         //    Order: explicit request value → current state on aw_process_instance
         //    → PENDINGATCONCERNEDDIVISION default.
         String stateName = resolveStateName(req);
 
-        // 1. Upload first. If the upstream comments API rejects the file or
-        //    the network call fails, we throw out of this method here BEFORE
-        //    writing any audit row, seeding any participants, or sending any
-        //    notifications. The caller gets a 4xx/5xx and no DB state has
-        //    been touched. This is the contract the UI relies on for
-        //    "an action is committed only if its document upload succeeds".
-        DocumentEntity doc = uploadIfPresent(file, req.getRequestInfo(),
+        // 1. Upload first. If any file in the list fails upstream, we throw
+        //    out of here BEFORE writing audit, seeding, or notifying. The
+        //    upload is all-or-nothing: either every file gets persisted or
+        //    none do.
+        List<DocumentEntity> docs = uploadIfPresent(files, req.getRequestInfo(),
                 req.getBusinessService(),
                 req.getActivityId(),
                 req.getProjectId(),
@@ -188,10 +186,10 @@ public class ApprovalRequestService {
                 approvers.size(), toNotify.size(),
                 seeded ? ", just seeded" : "",
                 didReset ? ", reset-after-reject" : "",
-                doc == null ? "" : ", attached doc " + doc.getUuid());
+                docs.isEmpty() ? "" : ", " + docs.size() + " doc(s) attached");
 
         return new RequestDivisionApprovalResult(
-                doc, approvers.size(), toNotify.size(), seeded);
+                docs, approvers.size(), toNotify.size(), seeded);
     }
 
     /**
@@ -303,24 +301,19 @@ public class ApprovalRequestService {
     @Transactional
     public RequestOwnerApprovalResult requestOwnerApproval(
             RequestOwnerApprovalRequest req,
-            MultipartFile file) {
+            List<MultipartFile> files) {
 
-        // 1. Upload first. If upstream rejects the file or the network
+        // 1. Upload first. If upstream rejects any file or the network
         //    call fails, throw out HERE before audit, before validation,
-        //    before the ALL_APPROVED transition fires. Caller gets 4xx/5xx
-        //    and the workflow remains untouched.
-        DocumentEntity doc = uploadIfPresent(file, req.getRequestInfo(),
+        //    before the ALL_APPROVED transition fires.
+        List<DocumentEntity> docs = uploadIfPresent(files, req.getRequestInfo(),
                 req.getBusinessService(),
                 req.getActivityId(),
                 req.getProjectId(),
                 req.getComment(),
                 "OWNER_APPROVAL_REQUEST");
 
-        // 2. Audit the click — only after upload succeeds. The subsequent
-        //    ALL_APPROVED transition will produce its own SUCCESS audit row,
-        //    so in the trail you'll see two rows for one click:
-        //       1) BUTTON_CLICK action=REQUEST_OWNER_APPROVAL
-        //       2) SUCCESS      action=ALL_APPROVED
+        // 2. Audit the click — only after upload succeeds.
         auditService.recordButtonClick(new ButtonAuditContext(
                 "REQUEST_OWNER_APPROVAL",
                 req.getBusinessService(),
@@ -332,10 +325,7 @@ public class ApprovalRequestService {
                 req.getRequestInfo(),
                 req));
 
-        // 3. Validate-and-fire. This raises if any participant is still
-        //    PENDING or REJECTED. On success the resulting transition
-        //    dispatches the READY_FOR_OWNER_REVIEW notification to the
-        //    owner approver from upstream assignments.
+        // 3. Validate-and-fire.
         parallelGateService.requestOwnerApproval(
                 req.getBusinessService(),
                 req.getActivityId(),
@@ -344,44 +334,65 @@ public class ApprovalRequestService {
                 req.getComment(),
                 req.getRequestInfo());
 
-        log.info("Owner approval requested by admin for activity {}{}",
-                req.getActivityId(),
-                doc == null ? "" : " (attached doc " + doc.getUuid() + ")");
+        log.info("Owner approval requested by admin for activity {} ({} doc(s))",
+                req.getActivityId(), docs.size());
 
-        return new RequestOwnerApprovalResult(doc);
+        return new RequestOwnerApprovalResult(docs);
     }
 
     /* ============================================================ */
 
-    private DocumentEntity uploadIfPresent(MultipartFile file,
-                                           RequestInfo requestInfo,
-                                           String businessService,
-                                           String activityId,
-                                           String projectId,
-                                           String comment,
-                                           String documentType) {
-        // Skip the upstream call only when there's nothing to send.
-        // A comment-only post (no file) is allowed and will produce an
-        // aw_document row with docId set to the upstream comment id.
-        boolean hasFile    = file != null && !file.isEmpty();
+    /**
+     * Upload zero or more files to the upstream comments API.
+     * The comment is posted as a standalone entry if no files are provided.
+     * All-or-nothing: if any file fails, the exception propagates before
+     * any DB rows are written (caller handles rollback).
+     *
+     * @return list of persisted {@link DocumentEntity} rows, empty if
+     *         neither files nor a comment were supplied
+     */
+    private List<DocumentEntity> uploadIfPresent(List<MultipartFile> files,
+                                                  RequestInfo requestInfo,
+                                                  String businessService,
+                                                  String activityId,
+                                                  String projectId,
+                                                  String comment,
+                                                  String documentType) {
+        List<MultipartFile> realFiles = files == null ? List.of() : files.stream()
+                .filter(f -> f != null && !f.isEmpty())
+                .toList();
+        boolean hasFiles   = !realFiles.isEmpty();
         boolean hasComment = comment != null && !comment.isBlank();
-        if (!hasFile && !hasComment) return null;
+
+        if (!hasFiles && !hasComment) return List.of();
 
         DocumentMetadata meta = new DocumentMetadata(
                 documentType, activityId, projectId,
                 businessService, /* processInstanceId */ null,
                 comment);
-        return documentService.uploadAndAttach(file, meta, requestInfo);
+
+        List<DocumentEntity> saved = new ArrayList<>();
+        if (hasFiles) {
+            // Upload each file separately. The upstream comments API creates
+            // one comment entry per call; each gets its own doc row.
+            for (MultipartFile file : realFiles) {
+                saved.add(documentService.uploadAndAttach(file, meta, requestInfo));
+            }
+        } else {
+            // Comment-only: one upstream call with no file part.
+            saved.add(documentService.uploadAndAttach(null, meta, requestInfo));
+        }
+        return saved;
     }
 
     /* ----- result records exposed back to the controller ----- */
 
     public record RequestDivisionApprovalResult(
-            DocumentEntity uploadedDocument,
+            List<DocumentEntity> uploadedDocuments,
             int totalApprovers,
             int notifiedApprovers,
             boolean justSeeded) {}
 
     public record RequestOwnerApprovalResult(
-            DocumentEntity uploadedDocument) {}
+            List<DocumentEntity> uploadedDocuments) {}
 }

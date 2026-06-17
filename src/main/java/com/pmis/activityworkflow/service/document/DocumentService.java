@@ -118,6 +118,41 @@ public class DocumentService {
     private record UserSnapshot(String uuid, String username, List<String> roles) {}
 
     /**
+     * Find an existing pre-uploaded row by {@code docId} and stamp it with the
+     * given {@code divisionCode} (and fill in any missing businessService/projectId).
+     * If no row exists yet (legacy path where the frontend skipped pre-upload),
+     * falls back to {@link #saveDocumentReference} which creates a new row —
+     * though the fileUrl will be missing in that case.
+     */
+    @Transactional
+    public DocumentEntity assignDivisionCode(String docId,
+                                              String divisionCode,
+                                              String businessService,
+                                              String projectId,
+                                              DocumentMetadata fallbackMeta,
+                                              RequestInfo requestInfo) {
+        return documentRepository.findByDocId(docId)
+                .map(doc -> {
+                    doc.setDivisionCode(divisionCode);
+                    if (businessService != null && doc.getBusinessService() == null) {
+                        doc.setBusinessService(businessService);
+                    }
+                    if (projectId != null && doc.getProjectId() == null) {
+                        doc.setProjectId(projectId);
+                    }
+                    doc.setUpdatedAt(System.currentTimeMillis());
+                    DocumentEntity updated = documentRepository.save(doc);
+                    log.info("Document {} assigned divisionCode={}", docId, divisionCode);
+                    return updated;
+                })
+                .orElseGet(() -> {
+                    log.warn("No pre-uploaded row found for docId={}, creating reference "
+                            + "(fileUrl will be missing)", docId);
+                    return saveDocumentReference(docId, fallbackMeta, requestInfo);
+                });
+    }
+
+    /**
      * Save a pre-existing document store reference without uploading anything.
      * Used when the frontend has already uploaded the file and passes back the
      * store ID (documentStoreId). Creates one {@link DocumentEntity} row that

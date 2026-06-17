@@ -377,11 +377,16 @@ public class ApprovalRequestService {
                 saved.add(documentService.uploadAndAttach(null, meta, req.getRequestInfo()));
             }
 
-            // Save each pre-uploaded document store ID as a local reference.
+            // Stamp each pre-uploaded document row with this division's code.
+            // If the frontend called POST /activities/documents/upload first,
+            // the row already exists with the real fileUrl — we just update
+            // divisionCode. If not (legacy path), a new row is created.
             if (hasDocs) {
                 for (String storeId : div.getDocumentStoreIds()) {
-                    saved.add(documentService.saveDocumentReference(
-                            storeId, meta, req.getRequestInfo()));
+                    saved.add(documentService.assignDivisionCode(
+                            storeId, divisionCode,
+                            req.getBusinessService(), req.getProjectId(),
+                            meta, req.getRequestInfo()));
                 }
             }
         }

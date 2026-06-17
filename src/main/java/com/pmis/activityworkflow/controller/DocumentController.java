@@ -5,6 +5,7 @@ import com.pmis.activityworkflow.repository.DocumentRepository;
 import com.pmis.activityworkflow.service.document.DocumentService;
 import com.pmis.activityworkflow.service.document.DocumentService.DocumentMetadata;
 import com.pmis.activityworkflow.web.models.RequestInfo;
+import com.pmis.activityworkflow.web.response.DocumentUploadResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
@@ -66,6 +67,51 @@ public class DocumentController {
 
         DocumentEntity saved = documentService.uploadAndAttach(file, meta, requestInfo);
         return new ResponseEntity<>(saved, HttpStatus.CREATED);
+    }
+
+    /**
+     * Pre-upload endpoint for the division-approval flow.
+     *
+     * <p>Call this <em>before</em> submitting
+     * {@code POST /activities/parallel/request-division-approval}. Each file
+     * is forwarded to the upstream comments API
+     * ({@code POST /projects/api/v3/activities/{activityId}/comments}) and a
+     * local {@code aw_document} row is created immediately (divisionCode stays
+     * {@code null} until {@code requestDivisionApproval} stamps it).</p>
+     *
+     * <p>The returned {@code documentStoreId} is the upstream comment id —
+     * pass it in {@code divisionApprovals[].documentStoreIds}.</p>
+     *
+     * <p>Form fields:
+     * <ul>
+     *   <li><b>file</b> – one or more files (repeat the part for multiple)</li>
+     *   <li><b>activityId</b> – required; the activity these files belong to</li>
+     * </ul>
+     * </p>
+     */
+    @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Pre-upload files; returns documentStoreId per file for division approval")
+    public ResponseEntity<List<DocumentUploadResponse>> uploadForDivision(
+            @RequestPart("file") List<MultipartFile> files,
+            @RequestParam String activityId) {
+
+        DocumentMetadata meta = new DocumentMetadata(
+                "DIVISION_DOCUMENT", activityId, null, null, null, null);
+
+        List<DocumentUploadResponse> responses = files.stream()
+                .filter(f -> f != null && !f.isEmpty())
+                .map(file -> {
+                    DocumentEntity saved = documentService.uploadAndAttach(file, meta, null);
+                    return DocumentUploadResponse.builder()
+                            .documentStoreId(saved.getDocId())
+                            .fileName(saved.getFileName())
+                            .fileUrl(saved.getFileUrl())
+                            .activityId(saved.getActivityId())
+                            .build();
+                })
+                .toList();
+
+        return ResponseEntity.ok(responses);
     }
 
     @GetMapping("/{uuid}")

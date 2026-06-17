@@ -377,14 +377,15 @@ public class ApprovalRequestService {
                 saved.add(documentService.uploadAndAttach(null, meta, req.getRequestInfo()));
             }
 
-            // Stamp each pre-uploaded document row with this division's code.
+            // Stamp each pre-uploaded document row with divisionCode + reviewerUuid.
             // If the frontend called POST /activities/documents/upload first,
             // the row already exists with the real fileUrl — we just update
-            // divisionCode. If not (legacy path), a new row is created.
+            // divisionCode and reviewerUuid. If not (legacy path), a new row is created.
             if (hasDocs) {
                 for (String storeId : div.getDocumentStoreIds()) {
                     saved.add(documentService.assignDivisionCode(
                             storeId, divisionCode,
+                            div.getUserUuid(),
                             req.getBusinessService(), req.getProjectId(),
                             meta, req.getRequestInfo()));
                 }

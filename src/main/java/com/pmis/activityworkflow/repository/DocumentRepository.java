@@ -23,6 +23,10 @@ public interface DocumentRepository extends JpaRepository<DocumentEntity, String
     List<DocumentEntity> findByActivityIdAndDivisionCodeOrderByCreatedAtAsc(
             String activityId, String divisionCode);
 
+    /** All documents for one activity intended for a specific reviewer. */
+    List<DocumentEntity> findByActivityIdAndReviewerUuidOrderByCreatedAtAsc(
+            String activityId, String reviewerUuid);
+
     /** Idempotent re-upload check — if the same docId came back from the store. */
     Optional<DocumentEntity> findByDocId(String docId);
 }

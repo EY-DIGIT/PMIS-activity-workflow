@@ -127,6 +127,7 @@ public class DocumentService {
     @Transactional
     public DocumentEntity assignDivisionCode(String docId,
                                               String divisionCode,
+                                              String reviewerUuid,
                                               String businessService,
                                               String projectId,
                                               DocumentMetadata fallbackMeta,
@@ -134,6 +135,7 @@ public class DocumentService {
         return documentRepository.findByDocId(docId)
                 .map(doc -> {
                     doc.setDivisionCode(divisionCode);
+                    doc.setReviewerUuid(reviewerUuid);
                     if (businessService != null && doc.getBusinessService() == null) {
                         doc.setBusinessService(businessService);
                     }
@@ -142,7 +144,8 @@ public class DocumentService {
                     }
                     doc.setUpdatedAt(System.currentTimeMillis());
                     DocumentEntity updated = documentRepository.save(doc);
-                    log.info("Document {} assigned divisionCode={}", docId, divisionCode);
+                    log.info("Document {} assigned divisionCode={} reviewerUuid={}",
+                            docId, divisionCode, reviewerUuid);
                     return updated;
                 })
                 .orElseGet(() -> {

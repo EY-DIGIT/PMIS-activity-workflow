@@ -129,11 +129,14 @@ public class ApprovalDetailService {
                 .map(s -> s.getAuditDetails() == null ? null : s.getAuditDetails().getCreatedTime())
                 .orElse(null);
 
-        // ---- 4. organization submissions — scoped to the caller's division ----
-        // Each division sees only its own comment and attachments, not other
-        // divisions'. The divisionCode comes from the participant row resolved above.
-        String callerDivisionCode = yourRow != null ? yourRow.getDivisionCode() : null;
-        List<OrganizationSubmission> submissions = fetchSubmissions(activityId, callerDivisionCode);
+        // ---- 4. organization submissions — scoped to the caller's identity ----
+        // Each reviewer sees only their own documents (tagged with their userUuid
+        // when the admin submitted the division-approval request).
+        // Fall back to divisionCode-based filtering for legacy activities where
+        // reviewerUuid was not recorded.
+        List<OrganizationSubmission> submissions = fetchSubmissions(
+                activityId, userUuid,
+                yourRow != null ? yourRow.getDivisionCode() : null);
 
         // ---- 5. per-division status rows ----
         // Scoped by the screen the UI is on:
@@ -248,32 +251,45 @@ public class ApprovalDetailService {
      */
     /**
      * Returns the upstream comments for this activity, filtered to only those
-     * whose upstream comment id exists in our local {@code aw_document} table
-     * for {@code divisionCode}. Each returned submission is enriched with its
-     * stored document-store-ID references as additional attachments.
+     * whose upstream comment id is in {@code aw_document} for the calling user.
      *
-     * <p>When {@code divisionCode} is null (legacy activities with no per-division
-     * data), all comments are returned unfiltered.</p>
+     * <p>Primary lookup: by {@code reviewerUuid} — rows stamped when the admin
+     * submitted the division-approval request with {@code divisionApprovals[].userUuid}.</p>
+     *
+     * <p>Fallback: by {@code divisionCode} — for legacy activities where
+     * {@code reviewerUuid} was not recorded.</p>
+     *
+     * <p>When neither yields results, all comments are returned (no filter applied).</p>
      */
     private List<OrganizationSubmission> fetchSubmissions(String activityId,
+                                                          String userUuid,
                                                           String divisionCode) {
-        // Local docs for this division — used both to filter comments (keep only
-        // "ours") and to enrich attachments (documentStoreIds stored separately).
-        List<DocumentEntity> divisionDocs = (divisionCode != null)
-                ? documentRepository.findByActivityIdAndDivisionCodeOrderByCreatedAtAsc(
-                        activityId, divisionCode)
-                : documentRepository.findByActivityIdOrderByCreatedAtAsc(activityId);
+        // Primary: documents tagged to this specific reviewer.
+        List<DocumentEntity> myDocs = (userUuid != null)
+                ? documentRepository.findByActivityIdAndReviewerUuidOrderByCreatedAtAsc(
+                        activityId, userUuid)
+                : List.of();
 
-        // Set of upstream comment ids that belong to this division.
-        // Used to include only relevant submissions from the upstream response.
-        Set<String> allowedCommentIds = divisionDocs.stream()
+        // Fallback: if no reviewer-tagged docs found, try division-scoped docs.
+        if (myDocs.isEmpty() && divisionCode != null) {
+            myDocs = documentRepository.findByActivityIdAndDivisionCodeOrderByCreatedAtAsc(
+                    activityId, divisionCode);
+        }
+
+        // Last resort: all docs for the activity (legacy, no per-user isolation).
+        if (myDocs.isEmpty()) {
+            myDocs = documentRepository.findByActivityIdOrderByCreatedAtAsc(activityId);
+        }
+
+        // Set of upstream comment ids that belong to this reviewer.
+        Set<String> allowedCommentIds = myDocs.stream()
                 .map(DocumentEntity::getDocId)
                 .filter(java.util.Objects::nonNull)
                 .collect(Collectors.toSet());
 
-        // Document store ID references (no fileName = not a comment upload,
-        // just a pre-uploaded file reference).
-        Map<String, List<DocumentEntity>> docsByCommentId = divisionDocs.stream()
+        // Keyed by docId — used to enrich attachments from local DB when
+        // the upstream GET /comments returns empty attachments[].
+        Map<String, List<DocumentEntity>> docsByCommentId = myDocs.stream()
                 .filter(d -> d.getDocId() != null)
                 .collect(Collectors.groupingBy(DocumentEntity::getDocId));
 
@@ -286,9 +302,8 @@ public class ApprovalDetailService {
         for (JsonNode el : elements) {
             String commentId = text(el, "id");
 
-            // Skip comments that belong to other divisions.
-            if (divisionCode != null && commentId != null
-                    && !allowedCommentIds.isEmpty()
+            // Skip comments not in this reviewer's allowed set.
+            if (commentId != null && !allowedCommentIds.isEmpty()
                     && !allowedCommentIds.contains(commentId)) {
                 continue;
             }

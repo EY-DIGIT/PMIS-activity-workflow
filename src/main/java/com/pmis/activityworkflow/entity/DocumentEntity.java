@@ -82,6 +82,15 @@ public class DocumentEntity {
     @Column(name = "division_code", length = 128)
     private String divisionCode;
 
+    /**
+     * UUID of the division reviewer this document is intended for.
+     * Set from {@code divisionApprovals[].userUuid} in the division-approval
+     * request. Used by the inbox to filter: user X sees only documents
+     * where {@code reviewer_uuid = X}.
+     */
+    @Column(name = "reviewer_uuid", length = 64)
+    private String reviewerUuid;
+
     /* ----- file metadata (populated when a file is attached; null for comment-only uploads) ----- */
 
     @Column(name = "file_name", length = 512)

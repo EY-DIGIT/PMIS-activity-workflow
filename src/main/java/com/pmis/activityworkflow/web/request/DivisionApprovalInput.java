@@ -25,12 +25,16 @@ public class DivisionApprovalInput {
     @NotBlank
     private String divisionId;
 
+    /** UUID of the reviewer for this division (from aw_parallel_participant.approver_user_uuid). */
+    private String userUuid;
+
     /** Optional comment visible only to this division's reviewer. */
     private String comment;
 
     /**
-     * IDs of files already uploaded to the document store.
-     * Stored locally as references — no re-upload happens here.
+     * IDs of files already uploaded to the document store via
+     * {@code POST /activities/documents/upload}. Each ID is the upstream
+     * comment id returned by that endpoint.
      */
     private List<String> documentStoreIds;
 }

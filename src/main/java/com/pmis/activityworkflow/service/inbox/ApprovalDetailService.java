@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -128,8 +129,11 @@ public class ApprovalDetailService {
                 .map(s -> s.getAuditDetails() == null ? null : s.getAuditDetails().getCreatedTime())
                 .orElse(null);
 
-        // ---- 4. organization submissions — every comment + attachment for this activity ----
-        List<OrganizationSubmission> submissions = fetchSubmissions(activityId);
+        // ---- 4. organization submissions — scoped to the caller's division ----
+        // Each division sees only its own comment and attachments, not other
+        // divisions'. The divisionCode comes from the participant row resolved above.
+        String callerDivisionCode = yourRow != null ? yourRow.getDivisionCode() : null;
+        List<OrganizationSubmission> submissions = fetchSubmissions(activityId, callerDivisionCode);
 
         // ---- 5. per-division status rows ----
         // Scoped by the screen the UI is on:
@@ -242,28 +246,54 @@ public class ApprovalDetailService {
      * an empty list rather than null so the rest of the screen still
      * renders.</p>
      */
-    private List<OrganizationSubmission> fetchSubmissions(String activityId) {
-        JsonNode elements = activityDetailsClient.fetchActivityComments(activityId);
+    /**
+     * Returns the upstream comments for this activity, filtered to only those
+     * whose upstream comment id exists in our local {@code aw_document} table
+     * for {@code divisionCode}. Each returned submission is enriched with its
+     * stored document-store-ID references as additional attachments.
+     *
+     * <p>When {@code divisionCode} is null (legacy activities with no per-division
+     * data), all comments are returned unfiltered.</p>
+     */
+    private List<OrganizationSubmission> fetchSubmissions(String activityId,
+                                                          String divisionCode) {
+        // Local docs for this division — used both to filter comments (keep only
+        // "ours") and to enrich attachments (documentStoreIds stored separately).
+        List<DocumentEntity> divisionDocs = (divisionCode != null)
+                ? documentRepository.findByActivityIdAndDivisionCodeOrderByCreatedAtAsc(
+                        activityId, divisionCode)
+                : documentRepository.findByActivityIdOrderByCreatedAtAsc(activityId);
 
-        // Build a lookup: upstream comment id → local DocumentEntity rows.
-        // This lets us enrich each comment's attachments from our own aw_document
-        // table, which is reliable even when the upstream GET /comments doesn't
-        // include attachment metadata in its response.
-        Map<String, List<DocumentEntity>> docsByCommentId = documentRepository
-                .findByActivityIdOrderByCreatedAtAsc(activityId)
-                .stream()
-                .filter(d -> d.getDocId() != null && d.getFileName() != null)
+        // Set of upstream comment ids that belong to this division.
+        // Used to include only relevant submissions from the upstream response.
+        Set<String> allowedCommentIds = divisionDocs.stream()
+                .map(DocumentEntity::getDocId)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        // Document store ID references (no fileName = not a comment upload,
+        // just a pre-uploaded file reference).
+        Map<String, List<DocumentEntity>> docsByCommentId = divisionDocs.stream()
+                .filter(d -> d.getDocId() != null)
                 .collect(Collectors.groupingBy(DocumentEntity::getDocId));
 
+        JsonNode elements = activityDetailsClient.fetchActivityComments(activityId);
         if (elements == null || !elements.isArray() || elements.isEmpty()) {
             return List.of();
         }
 
-        List<OrganizationSubmission> out = new ArrayList<>(elements.size());
+        List<OrganizationSubmission> out = new ArrayList<>();
         for (JsonNode el : elements) {
             String commentId = text(el, "id");
 
-            // Prefer upstream attachment list; fall back to local DB records.
+            // Skip comments that belong to other divisions.
+            if (divisionCode != null && commentId != null
+                    && !allowedCommentIds.isEmpty()
+                    && !allowedCommentIds.contains(commentId)) {
+                continue;
+            }
+
+            // Prefer upstream attachment list; fall back to local DB references.
             List<Attachment> attachments = toAttachments(el.path("attachments"));
             if (attachments.isEmpty() && commentId != null) {
                 attachments = toAttachmentsFromDocs(docsByCommentId.get(commentId));

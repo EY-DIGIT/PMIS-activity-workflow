@@ -13,6 +13,7 @@ import com.pmis.activityworkflow.service.audit.WorkflowAuditService;
 import com.pmis.activityworkflow.service.audit.WorkflowAuditService.ButtonAuditContext;
 import com.pmis.activityworkflow.web.models.RequestInfo;
 import com.pmis.activityworkflow.web.request.AutoSeedRequest;
+import com.pmis.activityworkflow.web.request.DivisionApprovalInput;
 import com.pmis.activityworkflow.web.request.RequestDivisionApprovalRequest;
 import com.pmis.activityworkflow.web.request.RequestOwnerApprovalRequest;
 import lombok.RequiredArgsConstructor;
@@ -67,24 +68,15 @@ public class ApprovalRequestService {
      * ============================================================ */
     @Transactional
     public RequestDivisionApprovalResult requestDivisionApproval(
-            RequestDivisionApprovalRequest req,
-            List<MultipartFile> files) {
+            RequestDivisionApprovalRequest req) {
 
-        // 0. Resolve which state to seed/notify on.
-        //    Order: explicit request value → current state on aw_process_instance
-        //    → PENDINGATCONCERNEDDIVISION default.
+        // 0. Resolve state.
         String stateName = resolveStateName(req);
 
-        // 1. Upload first. If any file in the list fails upstream, we throw
-        //    out of here BEFORE writing audit, seeding, or notifying. The
-        //    upload is all-or-nothing: either every file gets persisted or
-        //    none do.
-        List<DocumentEntity> docs = uploadIfPresent(files, req.getRequestInfo(),
-                req.getBusinessService(),
-                req.getActivityId(),
-                req.getProjectId(),
-                req.getComment(),
-                "DIVISION_APPROVAL_REQUEST");
+        // 1. Persist per-division comments and document store ID references.
+        //    Each division gets its own isolated comment and attachments stored
+        //    under divisionCode so the inbox can filter by division later.
+        List<DocumentEntity> docs = savePerDivisionDocuments(req);
 
         // 2. Audit the button click — only reached if upload succeeded (or
         //    there was no upload to do). REQUIRES_NEW so the row commits
@@ -304,15 +296,15 @@ public class ApprovalRequestService {
             RequestOwnerApprovalRequest req,
             List<MultipartFile> files) {
 
-        // 1. Upload first. If upstream rejects any file or the network
-        //    call fails, throw out HERE before audit, before validation,
-        //    before the ALL_APPROVED transition fires.
+        // 1. Upload files tagged to the OWNER division. If upstream rejects any
+        //    file or the network call fails, throw out BEFORE audit and transition.
         List<DocumentEntity> docs = uploadIfPresent(files, req.getRequestInfo(),
                 req.getBusinessService(),
                 req.getActivityId(),
                 req.getProjectId(),
                 req.getComment(),
-                "OWNER_APPROVAL_REQUEST");
+                "OWNER_APPROVAL_REQUEST",
+                "OWNER");
 
         // 2. Audit the click — only after upload succeeds.
         auditService.recordButtonClick(new ButtonAuditContext(
@@ -344,13 +336,66 @@ public class ApprovalRequestService {
     /* ============================================================ */
 
     /**
-     * Upload zero or more files to the upstream comments API.
-     * The comment is posted as a standalone entry if no files are provided.
-     * All-or-nothing: if any file fails, the exception propagates before
-     * any DB rows are written (caller handles rollback).
+     * For each division entry in the request:
+     * <ol>
+     *   <li>Upload the division's comment (text-only) to the upstream
+     *       comments API so it appears in the inbox submissions.</li>
+     *   <li>Save each pre-uploaded {@code documentStoreId} as a local
+     *       {@link DocumentEntity} reference tagged with the division code.</li>
+     * </ol>
+     * Falls back to the old flat comment (no division isolation) when
+     * {@code divisionApprovals} is absent.
+     */
+    private List<DocumentEntity> savePerDivisionDocuments(RequestDivisionApprovalRequest req) {
+        List<DivisionApprovalInput> divisions = req.getDivisionApprovals();
+
+        // Legacy path — no per-division structure provided.
+        if (divisions == null || divisions.isEmpty()) {
+            return uploadIfPresent(null, req.getRequestInfo(),
+                    req.getBusinessService(), req.getActivityId(),
+                    req.getProjectId(), req.getComment(),
+                    "DIVISION_APPROVAL_REQUEST", null);
+        }
+
+        List<DocumentEntity> saved = new ArrayList<>();
+        for (DivisionApprovalInput div : divisions) {
+            String divisionCode = div.getDivisionId();
+            boolean hasComment  = div.getComment() != null && !div.getComment().isBlank();
+            boolean hasDocs     = div.getDocumentStoreIds() != null
+                                  && !div.getDocumentStoreIds().isEmpty();
+
+            if (!hasComment && !hasDocs) continue;
+
+            DocumentMetadata meta = new DocumentMetadata(
+                    "DIVISION_APPROVAL_REQUEST",
+                    req.getActivityId(), req.getProjectId(),
+                    req.getBusinessService(), null,
+                    div.getComment(), divisionCode);
+
+            // Upload the comment text to upstream so it shows in organizationSubmissions.
+            if (hasComment) {
+                saved.add(documentService.uploadAndAttach(null, meta, req.getRequestInfo()));
+            }
+
+            // Save each pre-uploaded document store ID as a local reference.
+            if (hasDocs) {
+                for (String storeId : div.getDocumentStoreIds()) {
+                    saved.add(documentService.saveDocumentReference(
+                            storeId, meta, req.getRequestInfo()));
+                }
+            }
+        }
+        return saved;
+    }
+
+    /**
+     * Upload zero or more files to the upstream comments API tagged to a
+     * specific division. The comment is posted as a standalone entry when
+     * no files are provided. All-or-nothing: any file failure propagates
+     * before DB rows are written.
      *
-     * @return list of persisted {@link DocumentEntity} rows, empty if
-     *         neither files nor a comment were supplied
+     * @param divisionCode division context to stamp on every row ({@code "OWNER"},
+     *                     a division code, or {@code null} for legacy flat uploads)
      */
     private List<DocumentEntity> uploadIfPresent(List<MultipartFile> files,
                                                   RequestInfo requestInfo,
@@ -358,7 +403,8 @@ public class ApprovalRequestService {
                                                   String activityId,
                                                   String projectId,
                                                   String comment,
-                                                  String documentType) {
+                                                  String documentType,
+                                                  String divisionCode) {
         List<MultipartFile> realFiles = files == null ? List.of() : files.stream()
                 .filter(f -> f != null && !f.isEmpty())
                 .toList();
@@ -369,18 +415,14 @@ public class ApprovalRequestService {
 
         DocumentMetadata meta = new DocumentMetadata(
                 documentType, activityId, projectId,
-                businessService, /* processInstanceId */ null,
-                comment);
+                businessService, null, comment, divisionCode);
 
         List<DocumentEntity> saved = new ArrayList<>();
         if (hasFiles) {
-            // Upload each file separately. The upstream comments API creates
-            // one comment entry per call; each gets its own doc row.
             for (MultipartFile file : realFiles) {
                 saved.add(documentService.uploadAndAttach(file, meta, requestInfo));
             }
         } else {
-            // Comment-only: one upstream call with no file part.
             saved.add(documentService.uploadAndAttach(null, meta, requestInfo));
         }
         return saved;

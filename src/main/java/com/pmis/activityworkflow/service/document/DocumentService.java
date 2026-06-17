@@ -83,6 +83,7 @@ public class DocumentService {
                         ? stored.getAuthorLogin() : u.username())
                 .uploadedByEmail(stored.getAuthorEmail())
                 .uploadedByRoles(u.roles())
+                .divisionCode(meta.divisionCode())
                 .fileName(stored.getFileName())
                 .fileUrl(stored.getFileUrl())
                 .comment(meta.comment())
@@ -116,6 +117,44 @@ public class DocumentService {
 
     private record UserSnapshot(String uuid, String username, List<String> roles) {}
 
+    /**
+     * Save a pre-existing document store reference without uploading anything.
+     * Used when the frontend has already uploaded the file and passes back the
+     * store ID (documentStoreId). Creates one {@link DocumentEntity} row that
+     * links the store ID to its activity, division, and uploader.
+     */
+    @Transactional
+    public DocumentEntity saveDocumentReference(String documentStoreId,
+                                                DocumentMetadata meta,
+                                                RequestInfo requestInfo) {
+        long now = System.currentTimeMillis();
+        UserSnapshot u = userSnapshot(requestInfo);
+
+        DocumentEntity row = DocumentEntity.builder()
+                .uuid(UUID.randomUUID().toString())
+                .docId(documentStoreId)
+                .activityId(meta.activityId())
+                .projectId(meta.projectId())
+                .businessService(meta.businessService())
+                .processInstanceId(meta.processInstanceId())
+                .documentType(meta.documentType())
+                .divisionCode(meta.divisionCode())
+                .uploadedByUuid(u.uuid())
+                .uploadedByUsername(u.username())
+                .uploadedByRoles(u.roles())
+                .fileUrl(documentStoreId)
+                .comment(meta.comment())
+                .createdAt(now)
+                .updatedAt(now)
+                .build();
+
+        DocumentEntity saved = documentRepository.save(row);
+        log.info("Document reference persisted: uuid={} docId={} activityId={} divisionCode={} uploadedBy={}",
+                saved.getUuid(), saved.getDocId(), saved.getActivityId(),
+                saved.getDivisionCode(), u.uuid());
+        return saved;
+    }
+
     /** Carrier for the form fields that travel alongside the file. */
     public record DocumentMetadata(
             String documentType,
@@ -123,5 +162,13 @@ public class DocumentService {
             String projectId,
             String businessService,
             String processInstanceId,
-            String comment) {}
+            String comment,
+            String divisionCode) {
+
+        /** Convenience constructor for callers that don't have a divisionCode. */
+        public DocumentMetadata(String documentType, String activityId, String projectId,
+                                String businessService, String processInstanceId, String comment) {
+            this(documentType, activityId, projectId, businessService, processInstanceId, comment, null);
+        }
+    }
 }

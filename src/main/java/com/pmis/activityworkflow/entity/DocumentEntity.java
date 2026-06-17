@@ -75,6 +75,13 @@ public class DocumentEntity {
     @JdbcTypeCode(SqlTypes.ARRAY)
     private List<String> uploadedByRoles;
 
+    /**
+     * Division this document belongs to (e.g. "tmd-i", "TMD-II", "OWNER").
+     * Null for legacy flat uploads where there was no per-division isolation.
+     */
+    @Column(name = "division_code", length = 128)
+    private String divisionCode;
+
     /* ----- file metadata (populated when a file is attached; null for comment-only uploads) ----- */
 
     @Column(name = "file_name", length = 512)

@@ -6,6 +6,8 @@ import com.pmis.activityworkflow.entity.ProcessInstanceEntity;
 import com.pmis.activityworkflow.exception.InvalidTransitionException;
 import com.pmis.activityworkflow.repository.ParallelParticipantRepository;
 import com.pmis.activityworkflow.repository.ProcessInstanceRepository;
+import com.pmis.activityworkflow.service.assignments.ActivityAssignmentsClient;
+import com.pmis.activityworkflow.service.assignments.AssignmentData;
 import com.pmis.activityworkflow.service.document.DocumentService;
 import com.pmis.activityworkflow.service.document.DocumentService.DocumentMetadata;
 import com.pmis.activityworkflow.service.notification.NotificationClient;
@@ -22,8 +24,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.util.List;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * Admin-initiated "Request Division Approval" and "Request Owner Approval"
@@ -57,6 +61,7 @@ import java.util.ArrayList;
 public class ApprovalRequestService {
 
     private final DocumentService documentService;
+    private final ActivityAssignmentsClient assignmentsClient;
     private final ParallelParticipantRepository participantRepository;
     private final ProcessInstanceRepository processRepository;
     private final NotificationClient notificationClient;
@@ -357,6 +362,19 @@ public class ApprovalRequestService {
                     "DIVISION_APPROVAL_REQUEST", null);
         }
 
+        // Fetch assignments once — used to resolve each division's reviewer UUID.
+        // Best-effort: if the call fails we proceed without reviewer tagging.
+        Map<String, List<AssignmentData.UserRef>> divisionApprovers = Map.of();
+        try {
+            AssignmentData assignments = assignmentsClient.fetch(req.getActivityId());
+            if (assignments.getDivisionApprovers() != null) {
+                divisionApprovers = assignments.getDivisionApprovers();
+            }
+        } catch (Exception ex) {
+            log.warn("Could not fetch assignments for activity {} while saving division docs: {}",
+                    req.getActivityId(), ex.getMessage());
+        }
+
         List<DocumentEntity> saved = new ArrayList<>();
         for (DivisionApprovalInput div : divisions) {
             String divisionCode = div.getDivisionId();
@@ -365,6 +383,9 @@ public class ApprovalRequestService {
                                   && !div.getDocumentStoreIds().isEmpty();
 
             if (!hasComment && !hasDocs) continue;
+
+            // Resolve reviewer UUID: divisionApprovers[divisionCode][0].id
+            String reviewerUuid = resolveReviewerUuid(divisionApprovers, divisionCode);
 
             DocumentMetadata meta = new DocumentMetadata(
                     "DIVISION_APPROVAL_REQUEST",
@@ -385,13 +406,32 @@ public class ApprovalRequestService {
                 for (String storeId : div.getDocumentStoreIds()) {
                     saved.add(documentService.assignDivisionCode(
                             storeId, divisionCode,
-                            div.getUserUuid(),
+                            reviewerUuid,
                             req.getBusinessService(), req.getProjectId(),
                             meta, req.getRequestInfo()));
                 }
             }
         }
         return saved;
+    }
+
+    /**
+     * Resolve the first approver's UUID for a given division code from the
+     * upstream assignments map. Case-insensitive match on division code.
+     * Returns null if no match is found.
+     */
+    private String resolveReviewerUuid(Map<String, List<AssignmentData.UserRef>> divisionApprovers,
+                                        String divisionCode) {
+        if (divisionApprovers == null || divisionApprovers.isEmpty() || divisionCode == null) {
+            return null;
+        }
+        return divisionApprovers.entrySet().stream()
+                .filter(e -> divisionCode.equalsIgnoreCase(e.getKey()))
+                .map(Map.Entry::getValue)
+                .filter(list -> list != null && !list.isEmpty())
+                .map(list -> list.get(0).getId())
+                .findFirst()
+                .orElse(null);
     }
 
     /**

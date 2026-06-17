@@ -25,9 +25,6 @@ public class DivisionApprovalInput {
     @NotBlank
     private String divisionId;
 
-    /** UUID of the reviewer for this division (from aw_parallel_participant.approver_user_uuid). */
-    private String userUuid;
-
     /** Optional comment visible only to this division's reviewer. */
     private String comment;
 

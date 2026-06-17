@@ -23,7 +23,10 @@ public class DocumentUploadResponse {
     /** The upstream document store ID — use this in divisionApprovals[].documentStoreIds. */
     private String documentStoreId;
 
-    /** Original file name as received from the client. */
+    /** Division code this upload belongs to (echoed back for the frontend's reference). */
+    private String divisionId;
+
+    /** Original file name of the first (or only) uploaded file. */
     private String fileName;
 
     /** Download URL returned by the upstream document store, if available. */

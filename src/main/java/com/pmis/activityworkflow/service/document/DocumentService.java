@@ -37,6 +37,68 @@ public class DocumentService {
     private final MilestoneCommentsClient milestoneCommentsClient;
     private final DocumentRepository documentRepository;
 
+    /**
+     * Upload multiple files + comment for ONE division in a single upstream call.
+     * All files land as {@code attachments[]} on the same upstream comment.
+     * The returned {@code docId} (upstream comment id) is stored as the
+     * {@code documentStoreId} and tagged with {@code divisionCode} + {@code reviewerUuid}
+     * so the inbox can filter correctly.
+     */
+    public DocumentEntity uploadMultipleAndAttach(List<MultipartFile> files,
+                                                   String reviewerUuid,
+                                                   DocumentMetadata meta,
+                                                   RequestInfo requestInfo) {
+
+        MilestoneCommentResult stored = milestoneCommentsClient.uploadCommentWithFiles(
+                meta.activityId(), files, meta.comment());
+
+        if (stored.getDocId() == null) {
+            throw new IllegalStateException(
+                    "Upstream comments API accepted the upload but returned no id");
+        }
+
+        try {
+            long now = System.currentTimeMillis();
+            UserSnapshot u = userSnapshot(requestInfo);
+
+            DocumentEntity row = DocumentEntity.builder()
+                    .uuid(UUID.randomUUID().toString())
+                    .docId(stored.getDocId())
+                    .activityId(stored.getActivityId() != null
+                            ? stored.getActivityId() : meta.activityId())
+                    .projectId(meta.projectId())
+                    .businessService(meta.businessService())
+                    .processInstanceId(meta.processInstanceId())
+                    .documentType(meta.documentType())
+                    .uploadedByUuid(u.uuid())
+                    .uploadedByUsername(stored.getAuthorLogin() != null
+                            ? stored.getAuthorLogin() : u.username())
+                    .uploadedByEmail(stored.getAuthorEmail())
+                    .uploadedByRoles(u.roles())
+                    .divisionCode(meta.divisionCode())
+                    .reviewerUuid(reviewerUuid)
+                    .fileName(stored.getFileName())
+                    .fileUrl(stored.getFileUrl())
+                    .comment(meta.comment())
+                    .createdAt(now)
+                    .updatedAt(now)
+                    .build();
+
+            DocumentEntity saved = documentRepository.save(row);
+            log.info("Multi-file document persisted: uuid={} docId={} activityId={} "
+                    + "divisionCode={} reviewerUuid={} uploadedBy={}",
+                    saved.getUuid(), saved.getDocId(), saved.getActivityId(),
+                    saved.getDivisionCode(), reviewerUuid, u.uuid());
+            return saved;
+
+        } catch (Exception ex) {
+            log.error("Multi-file upload SUCCEEDED upstream (docId={}, activityId={}) "
+                            + "but DB persist FAILED — manual cleanup may be required",
+                    stored.getDocId(), stored.getActivityId(), ex);
+            throw ex;
+        }
+    }
+
     public DocumentEntity uploadAndAttach(MultipartFile file,
                                           DocumentMetadata meta,
                                           RequestInfo requestInfo) {

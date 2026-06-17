@@ -2,6 +2,8 @@ package com.pmis.activityworkflow.controller;
 
 import com.pmis.activityworkflow.entity.DocumentEntity;
 import com.pmis.activityworkflow.repository.DocumentRepository;
+import com.pmis.activityworkflow.service.assignments.ActivityAssignmentsClient;
+import com.pmis.activityworkflow.service.assignments.AssignmentData;
 import com.pmis.activityworkflow.service.document.DocumentService;
 import com.pmis.activityworkflow.service.document.DocumentService.DocumentMetadata;
 import com.pmis.activityworkflow.web.models.RequestInfo;
@@ -19,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/activities/documents")
@@ -28,6 +31,7 @@ import java.util.List;
 public class DocumentController {
 
     private final DocumentService documentService;
+    private final ActivityAssignmentsClient assignmentsClient;
     private final DocumentRepository documentRepository;
     private final ObjectMapper objectMapper;
 
@@ -70,48 +74,75 @@ public class DocumentController {
     }
 
     /**
-     * Pre-upload endpoint for the division-approval flow.
+     * Per-division pre-upload endpoint for the "Request Concerned Division Approval" flow.
      *
-     * <p>Call this <em>before</em> submitting
-     * {@code POST /activities/parallel/request-division-approval}. Each file
-     * is forwarded to the upstream comments API
-     * ({@code POST /projects/api/v3/activities/{activityId}/comments}) and a
-     * local {@code aw_document} row is created immediately (divisionCode stays
-     * {@code null} until {@code requestDivisionApproval} stamps it).</p>
+     * <p>Call this <strong>once per division</strong> before submitting
+     * {@code POST /activities/parallel/request-division-approval}.
+     * All files for that division are uploaded together with the division's
+     * comment in a single call to the upstream comments API
+     * ({@code POST /projects/api/v3/activities/{activityId}/comments}), producing
+     * ONE comment with multiple attachments. The returned {@code documentStoreId}
+     * is the upstream comment id — pass it in
+     * {@code divisionApprovals[].documentStoreIds}.</p>
      *
-     * <p>The returned {@code documentStoreId} is the upstream comment id —
-     * pass it in {@code divisionApprovals[].documentStoreIds}.</p>
+     * <p>The reviewer UUID is resolved automatically from the upstream assignments
+     * API so the inbox can filter by user.</p>
      *
      * <p>Form fields:
      * <ul>
-     *   <li><b>file</b> – one or more files (repeat the part for multiple)</li>
-     *   <li><b>activityId</b> – required; the activity these files belong to</li>
+     *   <li><b>file</b> – one or more files (repeat part for each file)</li>
+     *   <li><b>activityId</b> – required</li>
+     *   <li><b>divisionId</b> – required (e.g. "tmd-i", "TMD-II")</li>
+     *   <li><b>comment</b> – optional comment text for this division's reviewer</li>
      * </ul>
      * </p>
      */
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @Operation(summary = "Pre-upload files; returns documentStoreId per file for division approval")
-    public ResponseEntity<List<DocumentUploadResponse>> uploadForDivision(
-            @RequestPart("file") List<MultipartFile> files,
-            @RequestParam String activityId) {
+    @Operation(summary = "Per-division file upload; returns one documentStoreId for all files + comment")
+    public ResponseEntity<DocumentUploadResponse> uploadForDivision(
+            @RequestPart(value = "file", required = false) List<MultipartFile> files,
+            @RequestParam String activityId,
+            @RequestParam String divisionId,
+            @RequestParam(required = false) String comment) {
+
+        // Resolve the reviewer UUID for this division from the upstream assignments API.
+        String reviewerUuid = resolveReviewerUuid(activityId, divisionId);
 
         DocumentMetadata meta = new DocumentMetadata(
-                "DIVISION_DOCUMENT", activityId, null, null, null, null);
+                "DIVISION_DOCUMENT", activityId, null, null, null, comment, divisionId);
 
-        List<DocumentUploadResponse> responses = files.stream()
-                .filter(f -> f != null && !f.isEmpty())
-                .map(file -> {
-                    DocumentEntity saved = documentService.uploadAndAttach(file, meta, null);
-                    return DocumentUploadResponse.builder()
-                            .documentStoreId(saved.getDocId())
-                            .fileName(saved.getFileName())
-                            .fileUrl(saved.getFileUrl())
-                            .activityId(saved.getActivityId())
-                            .build();
-                })
-                .toList();
+        DocumentEntity saved = documentService.uploadMultipleAndAttach(
+                files == null ? List.of() : files, reviewerUuid, meta, null);
 
-        return ResponseEntity.ok(responses);
+        DocumentUploadResponse response = DocumentUploadResponse.builder()
+                .documentStoreId(saved.getDocId())
+                .divisionId(divisionId)
+                .fileName(saved.getFileName())
+                .fileUrl(saved.getFileUrl())
+                .activityId(saved.getActivityId())
+                .build();
+
+        return ResponseEntity.ok(response);
+    }
+
+    /** Look up divisionApprovers[divisionId][0].id from the assignments API. */
+    private String resolveReviewerUuid(String activityId, String divisionId) {
+        try {
+            AssignmentData data = assignmentsClient.fetch(activityId);
+            Map<String, List<AssignmentData.UserRef>> approvers = data.getDivisionApprovers();
+            if (approvers == null) return null;
+            return approvers.entrySet().stream()
+                    .filter(e -> divisionId.equalsIgnoreCase(e.getKey()))
+                    .map(Map.Entry::getValue)
+                    .filter(list -> list != null && !list.isEmpty())
+                    .map(list -> list.get(0).getId())
+                    .findFirst()
+                    .orElse(null);
+        } catch (Exception ex) {
+            log.warn("Could not resolve reviewer UUID for division {} / activity {}: {}",
+                    divisionId, activityId, ex.getMessage());
+            return null;
+        }
     }
 
     @GetMapping("/{uuid}")

@@ -22,6 +22,7 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -136,6 +137,101 @@ public class MilestoneCommentsClient {
             log.error("Comment upload failed for activity {}: {}", activityId, ex.getMessage());
             throw new InvalidTransitionException(
                     "Comment upload failed: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * Upload multiple files + a comment body in a single upstream request.
+     * All files land as {@code attachments[]} on the same comment object.
+     * Returns one {@link MilestoneCommentResult} whose {@code docId} is the
+     * shared upstream comment id — use it as the {@code documentStoreId}
+     * for all files in this batch.
+     *
+     * @param files       zero or more files; null / empty list is allowed when
+     *                    {@code commentBody} is non-blank (comment-only post)
+     * @param commentBody text body of the comment; defaults to "Document uploaded"
+     *                    if blank and files are present
+     */
+    public MilestoneCommentResult uploadCommentWithFiles(String activityId,
+                                                         List<MultipartFile> files,
+                                                         String commentBody) {
+        validateConfig();
+        validateActivityId(activityId);
+
+        List<MultipartFile> realFiles = files == null ? List.of() : files.stream()
+                .filter(f -> f != null && !f.isEmpty())
+                .toList();
+        boolean hasComment = StringUtils.hasText(commentBody);
+        if (realFiles.isEmpty() && !hasComment) {
+            throw new InvalidTransitionException(
+                    "Either one or more files or a non-blank comment is required");
+        }
+        for (MultipartFile f : realFiles) {
+            if (f.getSize() > props.getMaxFileSizeBytes()) {
+                throw new InvalidTransitionException(String.format(
+                        "File '%s' exceeds max allowed size of %d bytes",
+                        f.getOriginalFilename(), props.getMaxFileSizeBytes()));
+            }
+        }
+
+        String auth = currentAuthHeader();
+        if (!StringUtils.hasText(auth)) {
+            throw new InvalidTransitionException(
+                    "Authorization header is required to call the comments API");
+        }
+
+        String url = props.getCommentsUrlTemplate().replace("{activityId}", activityId);
+        try {
+            MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+            body.add(props.getBodyField(),
+                    hasComment ? commentBody : "Document uploaded");
+
+            for (MultipartFile file : realFiles) {
+                HttpHeaders fileHeaders = new HttpHeaders();
+                String detected = file.getContentType();
+                MediaType mediaType;
+                try {
+                    mediaType = (detected != null && !detected.isBlank())
+                            ? MediaType.parseMediaType(detected)
+                            : MediaType.APPLICATION_OCTET_STREAM;
+                } catch (Exception parseFail) {
+                    mediaType = MediaType.APPLICATION_OCTET_STREAM;
+                }
+                fileHeaders.setContentType(mediaType);
+                body.add(props.getFilesField(),
+                        new HttpEntity<>(toFilePart(file), fileHeaders));
+                log.info("Queuing file '{}' (size={}) for batch upload to activity {}",
+                        file.getOriginalFilename(), file.getSize(), activityId);
+            }
+
+            String raw = milestoneCommentsRestClient.post()
+                    .uri(url)
+                    .header("Authorization", auth)
+                    .header("accept", "application/json")
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .body(body)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::isError, (req, resp) -> {
+                        String responseBody = new String(resp.getBody().readAllBytes());
+                        log.error("Upstream comments API {} returned {}: {}",
+                                url, resp.getStatusCode(), responseBody);
+                        throw new InvalidTransitionException(
+                                "Upstream comments API failed (" + resp.getStatusCode() + "): "
+                                        + extractError(responseBody));
+                    })
+                    .body(String.class);
+
+            log.debug("Upstream batch-upload response: {}", raw);
+            String firstName = realFiles.isEmpty() ? null
+                    : realFiles.get(0).getOriginalFilename();
+            return parseResponse(raw, activityId, firstName);
+
+        } catch (InvalidTransitionException rethrow) {
+            throw rethrow;
+        } catch (Exception ex) {
+            log.error("Batch comment upload failed for activity {}: {}", activityId, ex.getMessage());
+            throw new InvalidTransitionException(
+                    "Batch comment upload failed: " + ex.getMessage());
         }
     }
 

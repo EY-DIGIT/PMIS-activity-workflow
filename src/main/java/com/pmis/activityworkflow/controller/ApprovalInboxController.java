@@ -3,8 +3,10 @@ package com.pmis.activityworkflow.controller;
 import com.pmis.activityworkflow.service.inbox.ActivityTimelineService;
 import com.pmis.activityworkflow.service.inbox.ApprovalDetailService;
 import com.pmis.activityworkflow.service.inbox.ApprovalInboxService;
+import com.pmis.activityworkflow.service.inbox.ApprovalSummaryService;
 import com.pmis.activityworkflow.web.response.ApprovalDetailResponse;
 import com.pmis.activityworkflow.web.response.ApprovalInboxItem;
+import com.pmis.activityworkflow.web.response.ApprovalSummaryResponse;
 import com.pmis.activityworkflow.web.response.TimelineEvent;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -32,6 +34,7 @@ public class ApprovalInboxController {
     private final ApprovalInboxService inboxService;
     private final ApprovalDetailService detailService;
     private final ActivityTimelineService timelineService;
+    private final ApprovalSummaryService summaryService;
 
     /**
      * List view — returns one row per approval the user is involved in.
@@ -79,6 +82,19 @@ public class ApprovalInboxController {
             @RequestParam(required = false) String stateName) {
 
         return ResponseEntity.ok(detailService.forActivity(activityId, userUuid, stateName));
+    }
+
+    /**
+     * Structured approval summary — answers in one call:
+     * when division approval was requested, when owner approval was requested,
+     * and each approver's decision (approved / rejected / pending) with timestamp.
+     */
+    @GetMapping("/{activityId}/approval-summary")
+    @Operation(summary = "Approval summary: request dates, concerned-division decisions, owner decision")
+    public ResponseEntity<ApprovalSummaryResponse> approvalSummary(
+            @PathVariable @NotBlank String activityId) {
+
+        return ResponseEntity.ok(summaryService.summary(activityId));
     }
 
     /**

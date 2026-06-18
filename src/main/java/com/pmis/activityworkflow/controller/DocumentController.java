@@ -129,6 +129,7 @@ public class DocumentController {
                 .documentStoreId(result.entity().getDocId())
                 .divisionId(divisionId)
                 .activityId(result.entity().getActivityId())
+                .comment(comment)
                 .attachments(uploadedFiles)
                 .build();
 

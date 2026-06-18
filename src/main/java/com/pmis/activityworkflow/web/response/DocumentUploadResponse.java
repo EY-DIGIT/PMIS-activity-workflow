@@ -31,6 +31,9 @@ public class DocumentUploadResponse {
     /** The activity this file was attached to. */
     private String activityId;
 
+    /** Comment text submitted with this upload. */
+    private String comment;
+
     /** All files uploaded in this request, with their download URLs. */
     private List<UploadedFile> attachments;
 

@@ -34,6 +34,12 @@ public class DocumentUploadResponse {
     /** Comment text submitted with this upload. */
     private String comment;
 
+    /** CONCERNED_DIVISION or OWNER_DIVISION — identifies which stage this upload belongs to. */
+    private String documentCategory;
+
+    /** Epoch-milliseconds timestamp of when the upload was persisted locally. */
+    private Long uploadedAt;
+
     /** All files uploaded in this request, with their download URLs. */
     private List<UploadedFile> attachments;
 

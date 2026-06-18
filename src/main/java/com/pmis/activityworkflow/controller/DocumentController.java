@@ -137,6 +137,8 @@ public class DocumentController {
                 .divisionId(divisionId)
                 .activityId(result.entity().getActivityId())
                 .comment(comment)
+                .documentCategory(documentCategory)
+                .uploadedAt(result.entity().getCreatedAt())
                 .attachments(uploadedFiles)
                 .build();
 

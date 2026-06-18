@@ -107,11 +107,18 @@ public class DocumentController {
             @RequestParam String divisionId,
             @RequestParam(required = false) String comment) {
 
-        // Resolve the reviewer UUID for this division from the upstream assignments API.
-        String reviewerUuid = resolveReviewerUuid(activityId, divisionId);
+        // Detect owner-division upload — divisionId == "OWNER" (case-insensitive)
+        boolean isOwnerDivision = "OWNER".equalsIgnoreCase(divisionId);
+
+        String reviewerUuid = isOwnerDivision
+                ? resolveOwnerReviewerUuid(activityId)
+                : resolveReviewerUuid(activityId, divisionId);
+
+        String documentType     = isOwnerDivision ? "OWNER_DOCUMENT"     : "DIVISION_DOCUMENT";
+        String documentCategory = isOwnerDivision ? "OWNER_DIVISION"     : "CONCERNED_DIVISION";
 
         DocumentMetadata meta = new DocumentMetadata(
-                "DIVISION_DOCUMENT", activityId, null, null, null, comment, divisionId);
+                documentType, activityId, null, null, null, comment, divisionId, documentCategory);
 
         MultiUploadResult result = documentService.uploadMultipleAndAttach(
                 files == null ? List.of() : files, reviewerUuid, meta, null);
@@ -134,6 +141,19 @@ public class DocumentController {
                 .build();
 
         return ResponseEntity.ok(response);
+    }
+
+    /** Look up ownerApprover[0].id from the assignments API. */
+    private String resolveOwnerReviewerUuid(String activityId) {
+        try {
+            AssignmentData data = assignmentsClient.fetch(activityId);
+            if (data.getOwnerApprover() == null || data.getOwnerApprover().isEmpty()) return null;
+            return data.getOwnerApprover().get(0).getId();
+        } catch (Exception ex) {
+            log.warn("Could not resolve owner reviewer UUID for activity {}: {}",
+                    activityId, ex.getMessage());
+            return null;
+        }
     }
 
     /** Look up divisionApprovers[divisionId][0].id from the assignments API. */

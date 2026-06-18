@@ -9,6 +9,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * Body for {@code POST /activities/parallel/request-owner-approval}.
  *
@@ -41,4 +43,11 @@ public class RequestOwnerApprovalRequest {
 
     /** Optional admin note attached to the owner-approval email. */
     private String comment;
+
+    /**
+     * Upstream comment ids returned by {@code POST /activities/documents/upload}
+     * with {@code divisionId=OWNER}. Pre-uploaded files are tagged to the owner
+     * division when this request is processed.
+     */
+    private List<String> documentStoreIds;
 }

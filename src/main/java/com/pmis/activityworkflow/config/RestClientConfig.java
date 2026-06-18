@@ -43,6 +43,11 @@ public class RestClientConfig {
         return buildClient(props.getConnectTimeoutMs(), props.getReadTimeoutMs());
     }
 
+    @Bean
+    public RestClient introspectRestClient(IntrospectProperties props) {
+        return buildClient(props.getConnectTimeoutMs(), props.getReadTimeoutMs());
+    }
+
     private RestClient buildClient(int connectTimeoutMs, int readTimeoutMs) {
         var factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(connectTimeoutMs);

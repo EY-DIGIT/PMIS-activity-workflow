@@ -83,6 +83,7 @@ public class DocumentService {
                     .uploadedByRoles(u.roles())
                     .divisionCode(meta.divisionCode())
                     .reviewerUuid(reviewerUuid)
+                    .documentCategory(meta.documentCategory())
                     .fileName(stored.getFileName())
                     .fileUrl(stored.getFileUrl())
                     .comment(meta.comment())
@@ -158,6 +159,7 @@ public class DocumentService {
                 .uploadedByEmail(stored.getAuthorEmail())
                 .uploadedByRoles(u.roles())
                 .divisionCode(meta.divisionCode())
+                .documentCategory(meta.documentCategory())
                 .fileName(stored.getFileName())
                 .fileUrl(stored.getFileUrl())
                 .comment(meta.comment())
@@ -216,6 +218,11 @@ public class DocumentService {
                     if (projectId != null && doc.getProjectId() == null) {
                         doc.setProjectId(projectId);
                     }
+                    // Derive category from divisionCode if not already set.
+                    if (doc.getDocumentCategory() == null) {
+                        doc.setDocumentCategory("OWNER".equalsIgnoreCase(divisionCode)
+                                ? "OWNER_DIVISION" : "CONCERNED_DIVISION");
+                    }
                     doc.setUpdatedAt(System.currentTimeMillis());
                     DocumentEntity updated = documentRepository.save(doc);
                     log.info("Document {} assigned divisionCode={} reviewerUuid={}",
@@ -251,6 +258,7 @@ public class DocumentService {
                 .processInstanceId(meta.processInstanceId())
                 .documentType(meta.documentType())
                 .divisionCode(meta.divisionCode())
+                .documentCategory(meta.documentCategory())
                 .uploadedByUuid(u.uuid())
                 .uploadedByUsername(u.username())
                 .uploadedByRoles(u.roles())
@@ -275,12 +283,20 @@ public class DocumentService {
             String businessService,
             String processInstanceId,
             String comment,
-            String divisionCode) {
+            String divisionCode,
+            String documentCategory) {
 
-        /** Convenience constructor for callers that don't have a divisionCode. */
+        /** No divisionCode or documentCategory. */
         public DocumentMetadata(String documentType, String activityId, String projectId,
                                 String businessService, String processInstanceId, String comment) {
-            this(documentType, activityId, projectId, businessService, processInstanceId, comment, null);
+            this(documentType, activityId, projectId, businessService, processInstanceId, comment, null, null);
+        }
+
+        /** With divisionCode, no documentCategory. */
+        public DocumentMetadata(String documentType, String activityId, String projectId,
+                                String businessService, String processInstanceId, String comment,
+                                String divisionCode) {
+            this(documentType, activityId, projectId, businessService, processInstanceId, comment, divisionCode, null);
         }
     }
 }

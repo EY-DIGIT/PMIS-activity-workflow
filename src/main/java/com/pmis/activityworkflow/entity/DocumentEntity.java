@@ -91,6 +91,15 @@ public class DocumentEntity {
     @Column(name = "reviewer_uuid", length = 64)
     private String reviewerUuid;
 
+    /**
+     * High-level category: {@code CONCERNED_DIVISION} for documents uploaded
+     * for a concerned-division reviewer; {@code OWNER_DIVISION} for documents
+     * uploaded for the owner-division approver.
+     * Null for legacy flat uploads.
+     */
+    @Column(name = "document_category", length = 64)
+    private String documentCategory;
+
     /* ----- file metadata (populated when a file is attached; null for comment-only uploads) ----- */
 
     @Column(name = "file_name", length = 512)

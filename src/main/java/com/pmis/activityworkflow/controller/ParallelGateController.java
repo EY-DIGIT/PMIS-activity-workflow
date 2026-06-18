@@ -26,7 +26,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -167,33 +166,32 @@ public class ParallelGateController {
     }
 
     /**
-     * Admin clicks "Request Owner Approval" after all divisions have
-     * approved. Accepts multiple file attachments plus a comment; all are
-     * stored under division code {@code OWNER} and routed to the owner
-     * approver. Validates the gate is fully approved, fires ALL_APPROVED,
-     * then dispatches READY_FOR_OWNER_REVIEW.
+     * Admin clicks "Request Owner Approval" after all divisions have approved.
+     *
+     * <p>The frontend must first upload files via
+     * {@code POST /activities/documents/upload?divisionId=OWNER} and pass the
+     * returned {@code documentStoreId} values in {@code documentStoreIds[]}.</p>
+     *
+     * <p>Sample body:
+     * <pre>
+     * {
+     *   "RequestInfo": { "userInfo": { "uuid": "...", "userName": "admin", "roles": [...] } },
+     *   "businessService": "ACTIVITY",
+     *   "activityId": "...",
+     *   "projectId": "...",
+     *   "stateName": "PENDINGATOWNERDIVISION",
+     *   "comment": "All divisions approved. Please review.",
+     *   "documentStoreIds": ["store-id-1", "store-id-2"]
+     * }
+     * </pre></p>
      */
     @PostMapping(value = "/request-owner-approval",
-                 consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+                 consumes = MediaType.APPLICATION_JSON_VALUE)
     @Operation(summary = "Admin button: advance the activity to the owner-approval stage")
     public ResponseEntity<RequestOwnerApprovalResult> requestOwnerApproval(
-            @RequestPart(value = "file", required = false) List<MultipartFile> files,
-            @RequestParam(value = "requestInfo", required = false) String requestInfoJson,
-            @RequestParam String businessService,
-            @RequestParam String activityId,
-            @RequestParam(required = false) String projectId,
-            @RequestParam(defaultValue = "PENDINGATOWNERDIVISION") String stateName,
-            @RequestParam(required = false) String comment) {
+            @RequestBody RequestOwnerApprovalRequest body) {
 
-        RequestOwnerApprovalRequest body = RequestOwnerApprovalRequest.builder()
-                .requestInfo(parseRequestInfo(requestInfoJson))
-                .businessService(businessService)
-                .activityId(activityId)
-                .projectId(projectId)
-                .stateName(stateName)
-                .comment(comment)
-                .build();
-        return ResponseEntity.ok(approvalRequestService.requestOwnerApproval(body, files));
+        return ResponseEntity.ok(approvalRequestService.requestOwnerApproval(body));
     }
 
     /* ----- helper ----- */

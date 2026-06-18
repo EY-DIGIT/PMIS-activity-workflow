@@ -297,21 +297,13 @@ public class ApprovalRequestService {
      *  Request Owner Approval
      * ============================================================ */
     @Transactional
-    public RequestOwnerApprovalResult requestOwnerApproval(
-            RequestOwnerApprovalRequest req,
-            List<MultipartFile> files) {
+    public RequestOwnerApprovalResult requestOwnerApproval(RequestOwnerApprovalRequest req) {
 
-        // 1. Upload files tagged to the OWNER division. If upstream rejects any
-        //    file or the network call fails, throw out BEFORE audit and transition.
-        List<DocumentEntity> docs = uploadIfPresent(files, req.getRequestInfo(),
-                req.getBusinessService(),
-                req.getActivityId(),
-                req.getProjectId(),
-                req.getComment(),
-                "OWNER_APPROVAL_REQUEST",
-                "OWNER");
+        // 1. Stamp pre-uploaded documents with OWNER division + owner reviewer UUID.
+        //    The frontend must call POST /activities/documents/upload?divisionId=OWNER first.
+        List<DocumentEntity> docs = stampOwnerDocuments(req);
 
-        // 2. Audit the click — only after upload succeeds.
+        // 2. Audit the click — only after document stamping succeeds.
         auditService.recordButtonClick(new ButtonAuditContext(
                 "REQUEST_OWNER_APPROVAL",
                 req.getBusinessService(),
@@ -336,6 +328,46 @@ public class ApprovalRequestService {
                 req.getActivityId(), docs.size());
 
         return new RequestOwnerApprovalResult(docs);
+    }
+
+    /**
+     * Stamp each pre-uploaded document store ID with {@code divisionCode=OWNER},
+     * the owner reviewer's UUID, and {@code documentCategory=OWNER_DIVISION}.
+     * Returns the list of affected {@link DocumentEntity} rows.
+     */
+    private List<DocumentEntity> stampOwnerDocuments(RequestOwnerApprovalRequest req) {
+        List<String> storeIds = req.getDocumentStoreIds();
+        if (storeIds == null || storeIds.isEmpty()) return List.of();
+
+        String ownerReviewerUuid = resolveOwnerReviewerUuid(req.getActivityId());
+
+        DocumentMetadata meta = new DocumentMetadata(
+                "OWNER_APPROVAL_REQUEST",
+                req.getActivityId(), req.getProjectId(),
+                req.getBusinessService(), null,
+                req.getComment(), "OWNER", "OWNER_DIVISION");
+
+        List<DocumentEntity> saved = new ArrayList<>();
+        for (String storeId : storeIds) {
+            saved.add(documentService.assignDivisionCode(
+                    storeId, "OWNER", ownerReviewerUuid,
+                    req.getBusinessService(), req.getProjectId(),
+                    meta, req.getRequestInfo()));
+        }
+        return saved;
+    }
+
+    /** Look up ownerApprover[0].id from the upstream assignments API. */
+    private String resolveOwnerReviewerUuid(String activityId) {
+        try {
+            AssignmentData data = assignmentsClient.fetch(activityId);
+            if (data.getOwnerApprover() == null || data.getOwnerApprover().isEmpty()) return null;
+            return data.getOwnerApprover().get(0).getId();
+        } catch (Exception ex) {
+            log.warn("Could not resolve owner reviewer UUID for activity {}: {}",
+                    activityId, ex.getMessage());
+            return null;
+        }
     }
 
     /* ============================================================ */
@@ -391,7 +423,7 @@ public class ApprovalRequestService {
                     "DIVISION_APPROVAL_REQUEST",
                     req.getActivityId(), req.getProjectId(),
                     req.getBusinessService(), null,
-                    div.getComment(), divisionCode);
+                    div.getComment(), divisionCode, "CONCERNED_DIVISION");
 
             // Upload the comment text to upstream so it shows in organizationSubmissions.
             if (hasComment) {

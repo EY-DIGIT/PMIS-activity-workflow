@@ -130,13 +130,14 @@ public class ApprovalDetailService {
                 .orElse(null);
 
         // ---- 4. organization submissions — scoped to the caller's identity ----
-        // Each reviewer sees only their own documents (tagged with their userUuid
-        // when the admin submitted the division-approval request).
-        // Fall back to divisionCode-based filtering for legacy activities where
-        // reviewerUuid was not recorded.
+        // Owner-division approvers see ALL documents (concerned + owner).
+        // Concerned-division reviewers see only their own division's documents.
+        boolean isOwnerApprover = yourRow != null
+                && "OWNER".equalsIgnoreCase(yourRow.getDivisionCode());
         List<OrganizationSubmission> submissions = fetchSubmissions(
                 activityId, userUuid,
-                yourRow != null ? yourRow.getDivisionCode() : null);
+                yourRow != null ? yourRow.getDivisionCode() : null,
+                isOwnerApprover);
 
         // ---- 5. per-division status rows ----
         // Scoped by the screen the UI is on:
@@ -261,27 +262,42 @@ public class ApprovalDetailService {
      *
      * <p>When neither yields results, all comments are returned (no filter applied).</p>
      */
+    /**
+     * @param isOwner  when true (owner-division approver), returns ALL documents
+     *                 for the activity — both CONCERNED_DIVISION and OWNER_DIVISION.
+     *                 Each submission is enriched with {@code divisionCode} and
+     *                 {@code documentCategory} so the UI can group by division.
+     *                 When false, filters to the calling reviewer's own docs only.
+     */
     private List<OrganizationSubmission> fetchSubmissions(String activityId,
                                                           String userUuid,
-                                                          String divisionCode) {
-        // Primary: documents tagged to this specific reviewer.
-        List<DocumentEntity> myDocs = (userUuid != null)
-                ? documentRepository.findByActivityIdAndReviewerUuidOrderByCreatedAtAsc(
-                        activityId, userUuid)
-                : List.of();
+                                                          String divisionCode,
+                                                          boolean isOwner) {
+        List<DocumentEntity> myDocs;
 
-        // Fallback: if no reviewer-tagged docs found, try division-scoped docs.
-        if (myDocs.isEmpty() && divisionCode != null) {
-            myDocs = documentRepository.findByActivityIdAndDivisionCodeOrderByCreatedAtAsc(
-                    activityId, divisionCode);
-        }
-
-        // Last resort: all docs for the activity (legacy, no per-user isolation).
-        if (myDocs.isEmpty()) {
+        if (isOwner) {
+            // Owner sees all documents — concerned divisions + owner division.
             myDocs = documentRepository.findByActivityIdOrderByCreatedAtAsc(activityId);
+        } else {
+            // Primary: documents tagged to this specific reviewer.
+            myDocs = (userUuid != null)
+                    ? documentRepository.findByActivityIdAndReviewerUuidOrderByCreatedAtAsc(
+                            activityId, userUuid)
+                    : List.of();
+
+            // Fallback: if no reviewer-tagged docs found, try division-scoped docs.
+            if (myDocs.isEmpty() && divisionCode != null) {
+                myDocs = documentRepository.findByActivityIdAndDivisionCodeOrderByCreatedAtAsc(
+                        activityId, divisionCode);
+            }
+
+            // Last resort: all docs for the activity (legacy, no per-user isolation).
+            if (myDocs.isEmpty()) {
+                myDocs = documentRepository.findByActivityIdOrderByCreatedAtAsc(activityId);
+            }
         }
 
-        // Set of upstream comment ids that belong to this reviewer.
+        // Set of upstream comment ids that belong to this viewer.
         Set<String> allowedCommentIds = myDocs.stream()
                 .map(DocumentEntity::getDocId)
                 .filter(java.util.Objects::nonNull)
@@ -302,7 +318,7 @@ public class ApprovalDetailService {
         for (JsonNode el : elements) {
             String commentId = text(el, "id");
 
-            // Skip comments not in this reviewer's allowed set.
+            // Skip comments not in this viewer's allowed set.
             if (commentId != null && !allowedCommentIds.isEmpty()
                     && !allowedCommentIds.contains(commentId)) {
                 continue;
@@ -314,12 +330,25 @@ public class ApprovalDetailService {
                 attachments = toAttachmentsFromDocs(docsByCommentId.get(commentId));
             }
 
+            // Enrich with division/category from local DB (first matching doc).
+            String commentDivisionCode = null;
+            String commentCategory     = null;
+            if (commentId != null) {
+                List<DocumentEntity> linked = docsByCommentId.get(commentId);
+                if (linked != null && !linked.isEmpty()) {
+                    commentDivisionCode = linked.get(0).getDivisionCode();
+                    commentCategory     = linked.get(0).getDocumentCategory();
+                }
+            }
+
             out.add(OrganizationSubmission.builder()
                     .commentId(commentId)
                     .body(text(el, "body"))
                     .createdAt(text(el, "createdAt"))
                     .author(toAuthor(el.path("author")))
                     .attachments(attachments)
+                    .divisionCode(commentDivisionCode)
+                    .documentCategory(commentCategory)
                     .build());
         }
         return out;

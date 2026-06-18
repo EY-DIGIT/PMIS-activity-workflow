@@ -90,6 +90,10 @@ public class ApprovalDetailResponse {
         private CommentAuthor author;
         private String createdAt;                  // ISO timestamp from upstream
         private List<Attachment> attachments;
+        /** Division this submission belongs to (e.g. "tmd-i", "TMD-II", "OWNER"). */
+        private String divisionCode;
+        /** CONCERNED_DIVISION or OWNER_DIVISION — for grouping in the owner's inbox view. */
+        private String documentCategory;
     }
 
     @Data

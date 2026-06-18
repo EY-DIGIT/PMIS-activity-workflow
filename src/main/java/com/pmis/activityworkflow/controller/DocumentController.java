@@ -6,6 +6,8 @@ import com.pmis.activityworkflow.service.assignments.ActivityAssignmentsClient;
 import com.pmis.activityworkflow.service.assignments.AssignmentData;
 import com.pmis.activityworkflow.service.document.DocumentService;
 import com.pmis.activityworkflow.service.document.DocumentService.DocumentMetadata;
+import com.pmis.activityworkflow.service.document.DocumentService.MultiUploadResult;
+import com.pmis.activityworkflow.service.document.MilestoneCommentResult;
 import com.pmis.activityworkflow.web.models.RequestInfo;
 import com.pmis.activityworkflow.web.response.DocumentUploadResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -111,15 +113,23 @@ public class DocumentController {
         DocumentMetadata meta = new DocumentMetadata(
                 "DIVISION_DOCUMENT", activityId, null, null, null, comment, divisionId);
 
-        DocumentEntity saved = documentService.uploadMultipleAndAttach(
+        MultiUploadResult result = documentService.uploadMultipleAndAttach(
                 files == null ? List.of() : files, reviewerUuid, meta, null);
 
+        List<DocumentUploadResponse.UploadedFile> uploadedFiles = result.attachments().stream()
+                .map(a -> DocumentUploadResponse.UploadedFile.builder()
+                        .fileName(a.getFileName())
+                        .fileUrl(a.getFileUrl())
+                        .mimeType(a.getMimeType())
+                        .sizeBytes(a.getSizeBytes())
+                        .build())
+                .toList();
+
         DocumentUploadResponse response = DocumentUploadResponse.builder()
-                .documentStoreId(saved.getDocId())
+                .documentStoreId(result.entity().getDocId())
                 .divisionId(divisionId)
-                .fileName(saved.getFileName())
-                .fileUrl(saved.getFileUrl())
-                .activityId(saved.getActivityId())
+                .activityId(result.entity().getActivityId())
+                .attachments(uploadedFiles)
                 .build();
 
         return ResponseEntity.ok(response);

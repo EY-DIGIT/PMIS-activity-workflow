@@ -6,6 +6,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * Response returned by {@code POST /activities/documents/upload}.
  *
@@ -26,12 +28,21 @@ public class DocumentUploadResponse {
     /** Division code this upload belongs to (echoed back for the frontend's reference). */
     private String divisionId;
 
-    /** Original file name of the first (or only) uploaded file. */
-    private String fileName;
-
-    /** Download URL returned by the upstream document store, if available. */
-    private String fileUrl;
-
     /** The activity this file was attached to. */
     private String activityId;
+
+    /** All files uploaded in this request, with their download URLs. */
+    private List<UploadedFile> attachments;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class UploadedFile {
+        private String fileName;
+        private String fileUrl;
+        private String mimeType;
+        private Long sizeBytes;
+    }
 }

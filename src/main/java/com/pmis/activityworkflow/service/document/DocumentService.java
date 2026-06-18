@@ -16,6 +16,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import static java.util.stream.Collectors.toList;
+
 /**
  * Upload + persist a document reference.
  *
@@ -40,14 +42,18 @@ public class DocumentService {
     /**
      * Upload multiple files + comment for ONE division in a single upstream call.
      * All files land as {@code attachments[]} on the same upstream comment.
-     * The returned {@code docId} (upstream comment id) is stored as the
-     * {@code documentStoreId} and tagged with {@code divisionCode} + {@code reviewerUuid}
-     * so the inbox can filter correctly.
+     * One {@code aw_document} row is created (keyed by the upstream comment id)
+     * and tagged with {@code divisionCode} + {@code reviewerUuid} so the inbox
+     * can filter correctly.
+     *
+     * @return a {@link MultiUploadResult} carrying the saved entity plus ALL
+     *         attachment info (fileName, fileUrl, mimeType, sizeBytes) for every
+     *         file that the upstream reported back.
      */
-    public DocumentEntity uploadMultipleAndAttach(List<MultipartFile> files,
-                                                   String reviewerUuid,
-                                                   DocumentMetadata meta,
-                                                   RequestInfo requestInfo) {
+    public MultiUploadResult uploadMultipleAndAttach(List<MultipartFile> files,
+                                                      String reviewerUuid,
+                                                      DocumentMetadata meta,
+                                                      RequestInfo requestInfo) {
 
         MilestoneCommentResult stored = milestoneCommentsClient.uploadCommentWithFiles(
                 meta.activityId(), files, meta.comment());
@@ -86,10 +92,11 @@ public class DocumentService {
 
             DocumentEntity saved = documentRepository.save(row);
             log.info("Multi-file document persisted: uuid={} docId={} activityId={} "
-                    + "divisionCode={} reviewerUuid={} uploadedBy={}",
+                    + "divisionCode={} reviewerUuid={} files={} uploadedBy={}",
                     saved.getUuid(), saved.getDocId(), saved.getActivityId(),
-                    saved.getDivisionCode(), reviewerUuid, u.uuid());
-            return saved;
+                    saved.getDivisionCode(), reviewerUuid,
+                    stored.getAttachments().size(), u.uuid());
+            return new MultiUploadResult(saved, stored.getAttachments());
 
         } catch (Exception ex) {
             log.error("Multi-file upload SUCCEEDED upstream (docId={}, activityId={}) "
@@ -98,6 +105,11 @@ public class DocumentService {
             throw ex;
         }
     }
+
+    /** Carries the persisted entity + every attachment returned by the upstream. */
+    public record MultiUploadResult(
+            DocumentEntity entity,
+            List<MilestoneCommentResult.Attachment> attachments) {}
 
     public DocumentEntity uploadAndAttach(MultipartFile file,
                                           DocumentMetadata meta,

@@ -4,6 +4,8 @@ import com.pmis.activityworkflow.config.MilestoneCommentsProperties;
 import com.pmis.activityworkflow.exception.InvalidTransitionException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.util.ArrayList;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ByteArrayResource;
@@ -332,44 +334,79 @@ public class MilestoneCommentsClient {
         String authorEmail = author.path("email").asText(null);
         String authorLogin = author.path("login").asText(null);
 
-        // Try to extract the file URL from the upstream response.
-        // Common shapes: data.files[0].url  or  data.attachments[0].url
-        String fileUrl = extractFileUrl(data);
+        // Extract ALL attachments from the upstream response.
+        List<MilestoneCommentResult.Attachment> attachments = extractAllAttachments(data);
+
+        // Convenience first-file fields.
+        String firstFileName = attachments.isEmpty() ? originalFileName
+                : attachments.get(0).getFileName();
+        String firstFileUrl = attachments.isEmpty() ? null
+                : attachments.get(0).getFileUrl();
 
         return MilestoneCommentResult.builder()
                 .docId(docId)
                 .activityId(resolvedActivityId)
                 .authorEmail(authorEmail)
                 .authorLogin(authorLogin)
-                .fileName(originalFileName)
-                .fileUrl(fileUrl)
+                .fileName(firstFileName)
+                .fileUrl(firstFileUrl)
+                .attachments(attachments)
                 .build();
     }
 
     /**
-     * Best-effort extraction of a file download URL from the upstream POST
-     * response. Tries the shapes we've seen in the wild; returns null if none match.
+     * Extract all file attachments from the upstream POST response.
+     * Tries {@code data.attachments[]}, {@code data.files[]}, and
+     * {@code data.file} (single object), in that priority order.
      */
-    private String extractFileUrl(JsonNode data) {
-        // Shape 1: data.files is an array
-        JsonNode files = data.path("files");
-        if (files.isArray() && !files.isEmpty()) {
-            String url = files.get(0).path("url").asText(null);
-            if (StringUtils.hasText(url)) return url;
-        }
-        // Shape 2: data.attachments is an array
+    private List<MilestoneCommentResult.Attachment> extractAllAttachments(JsonNode data) {
+        List<MilestoneCommentResult.Attachment> result = new ArrayList<>();
+
+        // Primary shape: data.attachments[]
         JsonNode attachments = data.path("attachments");
         if (attachments.isArray() && !attachments.isEmpty()) {
-            String url = attachments.get(0).path("url").asText(null);
-            if (StringUtils.hasText(url)) return url;
+            for (JsonNode a : attachments) {
+                String url = a.path("url").asText(null);
+                if (!StringUtils.hasText(url)) continue;
+                result.add(MilestoneCommentResult.Attachment.builder()
+                        .fileName(a.path("filename").asText(null))
+                        .fileUrl(url)
+                        .mimeType(a.path("mimeType").asText(null))
+                        .sizeBytes(a.has("sizeBytes") && !a.get("sizeBytes").isNull()
+                                ? a.get("sizeBytes").asLong() : null)
+                        .build());
+            }
+            if (!result.isEmpty()) return result;
         }
-        // Shape 3: data.file is a single object
+
+        // Fallback: data.files[]
+        JsonNode files = data.path("files");
+        if (files.isArray() && !files.isEmpty()) {
+            for (JsonNode f : files) {
+                String url = f.path("url").asText(null);
+                if (!StringUtils.hasText(url)) continue;
+                result.add(MilestoneCommentResult.Attachment.builder()
+                        .fileName(f.path("filename").asText(
+                                f.path("name").asText(null)))
+                        .fileUrl(url)
+                        .mimeType(f.path("mimeType").asText(null))
+                        .build());
+            }
+            if (!result.isEmpty()) return result;
+        }
+
+        // Last resort: data.file (single object)
         JsonNode file = data.path("file");
         if (file.isObject()) {
             String url = file.path("url").asText(null);
-            if (StringUtils.hasText(url)) return url;
+            if (StringUtils.hasText(url)) {
+                result.add(MilestoneCommentResult.Attachment.builder()
+                        .fileName(file.path("filename").asText(null))
+                        .fileUrl(url)
+                        .build());
+            }
         }
-        return null;
+        return result;
     }
 
     /** Lift a human-readable message out of the upstream error envelope. */

@@ -7,6 +7,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * Minimal parsed result from a successful upstream comment upload.
  *
@@ -34,9 +36,25 @@ public class MilestoneCommentResult {
     /** Author username/login (data.author.login). */
     private String authorLogin;
 
-    /** Original filename from the uploaded file (from MultipartFile, not the upstream response). */
+    /** First file's original filename (convenience field — same as attachments.get(0).fileName). */
     private String fileName;
 
-    /** Download URL returned by the upstream comments API for the attached file, if any. */
+    /** First file's download URL (convenience field — same as attachments.get(0).fileUrl). */
     private String fileUrl;
+
+    /** All attachments returned by the upstream comments API for this comment. */
+    @Builder.Default
+    private List<Attachment> attachments = List.of();
+
+    /** One uploaded file as returned in {@code data.attachments[]} by the upstream API. */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Attachment {
+        private String fileName;
+        private String fileUrl;
+        private String mimeType;
+        private Long sizeBytes;
+    }
 }

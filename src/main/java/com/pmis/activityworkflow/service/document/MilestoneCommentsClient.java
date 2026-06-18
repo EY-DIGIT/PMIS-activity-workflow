@@ -22,6 +22,7 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -106,7 +107,10 @@ public class MilestoneCommentsClient {
                         file.getOriginalFilename(), file.getSize(), mediaType, activityId);
             }
 
-            String raw = milestoneCommentsRestClient.post()
+            // Read as byte[] — ByteArrayHttpMessageConverter handles */* so it
+            // never conflicts with Jackson's application/json converter (which
+            // would try to deserialize the JSON object as String and fail).
+            byte[] rawBytes = milestoneCommentsRestClient.post()
                     .uri(url)
                     .header("Authorization", auth)
                     .header("accept", "application/json")
@@ -114,18 +118,18 @@ public class MilestoneCommentsClient {
                     .body(body)
                     .retrieve()
                     .onStatus(HttpStatusCode::isError, (req, resp) -> {
-                        // Surface the upstream error message to the caller so
-                        // operators see e.g. "storage_unavailable: Permission
-                        // denied: /mnt/pmis_files/..." instead of just a 503.
-                        String responseBody = new String(resp.getBody().readAllBytes());
+                        String responseBody = new String(resp.getBody().readAllBytes(),
+                                StandardCharsets.UTF_8);
                         log.error("Upstream comments API {} returned {}: {}",
                                 url, resp.getStatusCode(), responseBody);
                         throw new InvalidTransitionException(
                                 "Upstream comments API failed (" + resp.getStatusCode() + "): "
                                         + extractError(responseBody));
                     })
-                    .body(String.class);
+                    .body(byte[].class);
 
+            String raw = rawBytes != null
+                    ? new String(rawBytes, StandardCharsets.UTF_8) : "{}";
             log.debug("Upstream comments response: {}", raw);
             String originalName = (file != null && StringUtils.hasText(file.getOriginalFilename()))
                     ? file.getOriginalFilename() : null;
@@ -204,7 +208,7 @@ public class MilestoneCommentsClient {
                         file.getOriginalFilename(), file.getSize(), activityId);
             }
 
-            String raw = milestoneCommentsRestClient.post()
+            byte[] rawBytes = milestoneCommentsRestClient.post()
                     .uri(url)
                     .header("Authorization", auth)
                     .header("accept", "application/json")
@@ -212,15 +216,18 @@ public class MilestoneCommentsClient {
                     .body(body)
                     .retrieve()
                     .onStatus(HttpStatusCode::isError, (req, resp) -> {
-                        String responseBody = new String(resp.getBody().readAllBytes());
+                        String responseBody = new String(resp.getBody().readAllBytes(),
+                                StandardCharsets.UTF_8);
                         log.error("Upstream comments API {} returned {}: {}",
                                 url, resp.getStatusCode(), responseBody);
                         throw new InvalidTransitionException(
                                 "Upstream comments API failed (" + resp.getStatusCode() + "): "
                                         + extractError(responseBody));
                     })
-                    .body(String.class);
+                    .body(byte[].class);
 
+            String raw = rawBytes != null
+                    ? new String(rawBytes, StandardCharsets.UTF_8) : "{}";
             log.debug("Upstream batch-upload response: {}", raw);
             String firstName = realFiles.isEmpty() ? null
                     : realFiles.get(0).getOriginalFilename();

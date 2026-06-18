@@ -7,6 +7,7 @@ import com.pmis.activityworkflow.service.assignments.AssignmentData;
 import com.pmis.activityworkflow.service.audit.WorkflowAuditService;
 import com.pmis.activityworkflow.service.eligibility.ActivityCompletionEligibilityClient;
 import com.pmis.activityworkflow.service.eligibility.ActivityCompletionEligibilityClient.EligibilityResult;
+import com.pmis.activityworkflow.service.transition.ActivityStatusUpdateClient;
 import com.pmis.activityworkflow.service.transition.ProcessStateAndAction;
 import com.pmis.activityworkflow.service.transition.StatusUpdateService;
 import com.pmis.activityworkflow.service.transition.TransitionEnrichmentService;
@@ -53,6 +54,7 @@ public class WorkflowTransitionService {
     private final WorkflowAuditService auditService;
     private final ActivityAssignmentsClient assignmentsClient;
     private final ActivityCompletionEligibilityClient eligibilityClient;
+    private final ActivityStatusUpdateClient activityStatusUpdateClient;
 
     @Transactional
     public List<ProcessInstanceDTO> transition(TransitionRequest request) {
@@ -66,6 +68,12 @@ public class WorkflowTransitionService {
             enrichmentService.enrichProcessRequest(request.getRequestInfo(), tuples);
             workflowValidator.validateRequest(request.getRequestInfo(), tuples);
             statusUpdateService.updateStatus(request.getRequestInfo(), tuples);
+
+            // If any instance reached ACTIVITYCOMPLETED, notify the upstream projects API.
+            request.getProcessInstances().stream()
+                    .filter(pi -> pi.getState() != null
+                            && "ACTIVITYCOMPLETED".equals(pi.getState().getStateName()))
+                    .forEach(pi -> activityStatusUpdateClient.markCompleted(pi.getActivityId()));
 
             // atomic with the transition
             auditService.recordSuccess(request, tuples);

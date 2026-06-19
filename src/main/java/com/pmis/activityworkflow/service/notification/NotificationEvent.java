@@ -32,5 +32,11 @@ public enum NotificationEvent {
     OWNER_RETURNED_TO_DIVISIONS,
 
     /** Workflow reached terminal state. */
-    COMPLETED
+    COMPLETED,
+
+    /**
+     * Periodic reminder to an approver whose item has been PENDING for
+     * ≥ 30 days. Fired by the {@code PendingApprovalReminderJob} cron.
+     */
+    APPROVAL_REMINDER
 }

@@ -83,4 +83,31 @@ public interface ParallelParticipantRepository
            """)
     List<ParallelParticipantEntity> findInboxParticipantsForActivity(
             @Param("activityId") String activityId);
+
+    /**
+     * All PENDING approvers who are still within the reminder window
+     * (created within the last {@code windowStart} ms) AND have not yet
+     * received a reminder today (last reminder older than {@code dailyThreshold}).
+     *
+     * <p>Used by the daily cron to send a reminder every day from the
+     * request date up to 30 days. Once {@code createdAt} falls before
+     * {@code windowStart} the row is no longer returned and reminders stop.</p>
+     *
+     * <p>Covers both stages:
+     * {@code PENDINGATCONCERNEDDIVISION} (concerned-division reviewers) and
+     * {@code PENDINGATOWNERDIVISION} (owner-division approver).</p>
+     */
+    @Query("""
+           SELECT p FROM ParallelParticipantEntity p
+            WHERE p.voteStatus = 'PENDING'
+              AND p.createdAt  >= :windowStart
+              AND (p.lastReminderSentAt IS NULL
+                   OR p.lastReminderSentAt <= :dailyThreshold)
+              AND p.stateName IN ('PENDINGATCONCERNEDDIVISION',
+                                  'PENDINGATOWNERDIVISION')
+            ORDER BY p.createdAt ASC
+           """)
+    List<ParallelParticipantEntity> findPendingForReminder(
+            @Param("windowStart")    Long windowStart,
+            @Param("dailyThreshold") Long dailyThreshold);
 }

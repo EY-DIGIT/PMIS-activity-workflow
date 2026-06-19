@@ -90,6 +90,52 @@ public class NotificationClient {
     }
 
     /* ============================================================
+     *  Reminder notification (cron job — pending for ≥ 30 days)
+     * ============================================================ */
+
+    /**
+     * Send a reminder to one approver whose item has been PENDING for
+     * {@code pendingDays} days. Updates {@code lastReminderSentAt} on success
+     * so the scheduler knows not to re-send within the configured window.
+     */
+    public void notifyReminder(ParallelParticipantEntity participant, long pendingDays) {
+        if (!canDispatch(NotificationEvent.APPROVAL_REMINDER, 1)) return;
+        if (isBlank(participant.getApproverEmail())) {
+            log.warn("No email for approver {} on activity {} - skipping reminder",
+                    participant.getApproverUserUuid(), participant.getActivityId());
+            return;
+        }
+
+        Map<String, Object> vars = buildApprovalVariables(participant);
+        vars.put("pendingDays", String.valueOf(pendingDays));
+        vars.put("divisionCode", participant.getDivisionCode() == null ? "" : participant.getDivisionCode());
+        vars.put("divisionName", participant.getDivisionName() == null ? "" : participant.getDivisionName());
+
+        RenderedNotification rendered = templates.render(NotificationEvent.APPROVAL_REMINDER, vars);
+        Recipient recipient = new Recipient(
+                participant.getApproverUserUuid(),
+                participant.getApproverEmail(),
+                participant.getApproverName());
+        Map<String, Object> payload = buildPayload(NotificationEvent.APPROVAL_REMINDER,
+                recipient, vars, rendered, null);
+
+        try {
+            String response = post(payload);
+            long now = System.currentTimeMillis();
+            participant.setLastReminderSentAt(now);
+            participant.setUpdatedAt(now);
+            participantRepository.save(participant);
+            log.info("Reminder sent to {} for activity {} (pending {} day(s))",
+                    participant.getApproverEmail(), participant.getActivityId(), pendingDays);
+            log.debug("Reminder response: {}", response);
+        } catch (Exception ex) {
+            log.warn("Reminder failed for approver {} ({}) on activity {}: {}",
+                    participant.getApproverUserUuid(), participant.getApproverEmail(),
+                    participant.getActivityId(), ex.getMessage());
+        }
+    }
+
+    /* ============================================================
      *  Single outcome notification (APPROVED / REJECTED / COMPLETED)
      * ============================================================ */
     public void notifyOutcome(ProcessInstanceEntity transition,

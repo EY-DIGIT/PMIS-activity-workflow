@@ -112,4 +112,12 @@ public class ParallelParticipantEntity {
 
     @Column(name = "updated_at")
     private Long updatedAt;
+
+    /**
+     * Epoch-ms when the last pending-approval reminder email was sent to this
+     * approver. Null until the first reminder fires. Used by the reminder
+     * scheduler to enforce the 30-day re-send window.
+     */
+    @Column(name = "last_reminder_sent_at")
+    private Long lastReminderSentAt;
 }

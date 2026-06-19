@@ -1,0 +1,20 @@
+===SUBJECT===
+Reminder: {{activityDisplayCode}} {{activityName}} is awaiting your approval ({{pendingDays}} days pending)
+
+===BODY===
+Hello {{approverName}},
+
+This is a reminder that the following activity has been waiting for your approval for {{pendingDays}} days and is still pending.
+
+  Activity         : {{activityDisplayCode}} {{activityName}}
+  Project          : {{projectCode}} {{projectName}}
+  Division         : {{divisionName}}
+  Pending since    : {{submittedAt}}
+  Current state    : {{stateName}}
+
+Please log in to the system and take action (approve or reject) at your earliest convenience.
+
+If you have already taken action and received this email in error, please disregard.
+
+Regards,
+Activity Workflow

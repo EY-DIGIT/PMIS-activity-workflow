@@ -178,6 +178,20 @@ public class DocumentController {
         }
     }
 
+    /**
+     * Remove a pre-uploaded document so it no longer appears in the approval
+     * inbox. Use the {@code documentStoreId} returned by the upload endpoint.
+     *
+     * <p>Only the local {@code aw_document} row is removed; the actual
+     * file/comment on the upstream service is not affected.</p>
+     */
+    @DeleteMapping("/store/{docId}")
+    @Operation(summary = "Delete a document reference by its store ID (removes from inbox)")
+    public ResponseEntity<Void> deleteByDocId(@PathVariable String docId) {
+        documentService.deleteByDocId(docId);
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping("/{uuid}")
     @Operation(summary = "Fetch one document by its local uuid")
     public ResponseEntity<DocumentEntity> get(@PathVariable String uuid) {

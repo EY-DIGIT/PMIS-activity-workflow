@@ -194,6 +194,24 @@ public class DocumentService {
     private record UserSnapshot(String uuid, String username, List<String> roles) {}
 
     /**
+     * Remove a document reference by its upstream store id ({@code docId}).
+     * Only the local {@code aw_document} row is deleted; the upstream
+     * comment/attachment is not touched. Once this row is gone the inbox
+     * query will no longer include the stale attachment.
+     */
+    @Transactional
+    public void deleteByDocId(String docId) {
+        documentRepository.findByDocId(docId).ifPresentOrElse(
+                doc -> {
+                    documentRepository.delete(doc);
+                    log.info("Document reference deleted: docId={} uuid={} activityId={}",
+                            docId, doc.getUuid(), doc.getActivityId());
+                },
+                () -> log.warn("deleteByDocId: no row found for docId={}", docId)
+        );
+    }
+
+    /**
      * Find an existing pre-uploaded row by {@code docId} and stamp it with the
      * given {@code divisionCode} (and fill in any missing businessService/projectId).
      * If no row exists yet (legacy path where the frontend skipped pre-upload),

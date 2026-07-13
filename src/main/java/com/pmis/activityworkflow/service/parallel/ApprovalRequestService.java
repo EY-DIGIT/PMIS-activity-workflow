@@ -333,11 +333,19 @@ public class ApprovalRequestService {
     /**
      * Stamp each pre-uploaded document store ID with {@code divisionCode=OWNER},
      * the owner reviewer's UUID, and {@code documentCategory=OWNER_DIVISION}.
-     * Returns the list of affected {@link DocumentEntity} rows.
+     *
+     * <p>If the admin provided only a comment (no {@code documentStoreIds}), the
+     * comment is posted to the upstream comments API and tracked in {@code aw_document}
+     * so it appears in the owner's approval inbox submissions.</p>
+     *
+     * @return the list of affected/created {@link DocumentEntity} rows
      */
     private List<DocumentEntity> stampOwnerDocuments(RequestOwnerApprovalRequest req) {
         List<String> storeIds = req.getDocumentStoreIds();
-        if (storeIds == null || storeIds.isEmpty()) return List.of();
+        boolean hasDocs    = storeIds != null && !storeIds.isEmpty();
+        boolean hasComment = req.getComment() != null && !req.getComment().isBlank();
+
+        if (!hasDocs && !hasComment) return List.of();
 
         String ownerReviewerUuid = resolveOwnerReviewerUuid(req.getActivityId());
 
@@ -348,12 +356,24 @@ public class ApprovalRequestService {
                 req.getComment(), "OWNER", "OWNER_DIVISION");
 
         List<DocumentEntity> saved = new ArrayList<>();
-        for (String storeId : storeIds) {
-            saved.add(documentService.assignDivisionCode(
-                    storeId, "OWNER", ownerReviewerUuid,
-                    req.getBusinessService(), req.getProjectId(),
-                    meta, req.getRequestInfo()));
+
+        // Comment-only: upload to upstream and track locally so the inbox shows it.
+        if (hasComment && !hasDocs) {
+            DocumentService.MultiUploadResult result = documentService.uploadMultipleAndAttach(
+                    List.of(), ownerReviewerUuid, meta, req.getRequestInfo());
+            saved.add(result.entity());
         }
+
+        // Stamp pre-uploaded file docs with OWNER division + reviewer UUID.
+        if (hasDocs) {
+            for (String storeId : storeIds) {
+                saved.add(documentService.assignDivisionCode(
+                        storeId, "OWNER", ownerReviewerUuid,
+                        req.getBusinessService(), req.getProjectId(),
+                        meta, req.getRequestInfo()));
+            }
+        }
+
         return saved;
     }
 
@@ -426,8 +446,14 @@ public class ApprovalRequestService {
                     div.getComment(), divisionCode, "CONCERNED_DIVISION");
 
             // Upload the comment text to upstream so it shows in organizationSubmissions.
+            // Use uploadMultipleAndAttach (not uploadAndAttach) so that reviewerUuid is
+            // stamped on the aw_document row — the inbox primary lookup is by reviewerUuid,
+            // and a null reviewerUuid causes the comment to be silently excluded when
+            // the viewer also has file-docs in the allowed set.
             if (hasComment) {
-                saved.add(documentService.uploadAndAttach(null, meta, req.getRequestInfo()));
+                DocumentService.MultiUploadResult result = documentService.uploadMultipleAndAttach(
+                        List.of(), reviewerUuid, meta, req.getRequestInfo());
+                saved.add(result.entity());
             }
 
             // Stamp each pre-uploaded document row with divisionCode + reviewerUuid.

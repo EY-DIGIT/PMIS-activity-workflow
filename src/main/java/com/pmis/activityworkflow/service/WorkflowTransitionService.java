@@ -112,7 +112,7 @@ public class WorkflowTransitionService {
                 log.warn("Activity {} is missing assignments: ownerApproverMissing={} divisionApproverMissing={}",
                         pi.getActivityId(), ownerApproverMissing, divisionApproverMissing);
                 throw new InvalidTransitionException(
-                        "Please assigne this approver or owner");
+                        "Please assign users for Approver and Member");
             }
         }
     }
